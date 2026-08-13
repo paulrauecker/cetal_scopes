@@ -1,0 +1,26 @@
+site_name: cetal_scopes
+repo_url: https://github.com/paulrauecker/cetal_scopes
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Format Spec: format-spec.md
+  - API Reference: api/reference.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy   # matches your docstring convention
+
+markdown_extensions:
+  - admonition        # nice callout boxes: !!! note / !!! warning
+  - pymdownx.highlight # syntax highlighting
+  - pymdownx.superfences
