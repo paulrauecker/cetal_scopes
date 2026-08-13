@@ -6,12 +6,13 @@ theme:
     - navigation.sections
     - content.code.copy
 
-nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - Format Spec: format-spec.md
-  - API Reference: api/reference.md
-
+# nav:
+#   - Home: index.md
+#   - Getting Started: getting-started.md
+#   - Format Spec: format-spec.md
+#   - Oscilloscopes: scopes/
+#   - API Reference: api/reference.md
+#
 plugins:
   - search
   - mkdocstrings:
@@ -21,6 +22,13 @@ plugins:
             docstring_style: numpy   # matches your docstring convention
 
 markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
   - admonition        # nice callout boxes: !!! note / !!! warning
   - pymdownx.highlight # syntax highlighting
   - pymdownx.superfences
+
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
