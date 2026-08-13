@@ -4,3 +4,6 @@ Goal: to streamline the capturing of oscilloscope data from various sources as w
 
 ## Installation
 `uv pip install -e $sourcedir`
+
+## Viewing the Docs
+`uv run mkdocs serve`
