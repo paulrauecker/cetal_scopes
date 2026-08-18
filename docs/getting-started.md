@@ -35,4 +35,5 @@ save_capture(capture, "example_copy.json")
 *(list vendors/models as parsers are implemented)*
 
 - [ ] Spectrum M5i.3367
+- [ ] Siglent SDS6204L 
 - [ ] Tektronix (TBD)

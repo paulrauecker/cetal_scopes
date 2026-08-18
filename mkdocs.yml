@@ -1,4 +1,5 @@
 site_name: cetal_scopes
+site_url: https://paulrauecker.github.io/cetal_scopes/
 repo_url: https://github.com/paulrauecker/cetal_scopes
 theme:
   name: material

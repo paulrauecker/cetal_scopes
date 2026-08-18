@@ -1,4 +1,4 @@
-# cetal_scopes
+# cetal_scopes Python module
 
 A unified Python module for normalizing oscilloscope captures from multiple
 scope vendors into a single universal container format, used across CETAL's
