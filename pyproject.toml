@@ -30,5 +30,5 @@ dev = [
 
 
 [tool.pytest.ini_options]
-addopts = "-ra --cov=cetal_scope --cov-report=term-missing"
+addopts = "-ra --cov=cetal_scopes --cov-report=term-missing"
 testpaths = ["tests"]
