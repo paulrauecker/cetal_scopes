@@ -321,11 +321,14 @@ class _SocketTransport:
         return data
 
     def _read_line(self) -> str:
-        while b"\n" not in self._buffer:
-            self._receive()
-        line, _, remainder = self._buffer.partition(b"\n")
-        self._buffer = bytearray(remainder)
-        return line.decode("ascii", errors="replace").strip()
+        while True:
+            while b"\n" not in self._buffer:
+                self._receive()
+            line, _, remainder = self._buffer.partition(b"\n")
+            self._buffer = bytearray(remainder)
+            text = line.decode("ascii", errors="replace").strip()
+            if text:
+                return text
 
     def _read_block(self) -> bytes:
         while not self._buffer:
@@ -647,6 +650,7 @@ class SiglentSDS6204L(Scope):
             sharing the first channel's timebase.
         """
         self._require_connected()
+        self._write(":TRIGger:STOP")
         self._write(f":TRIGger:MODE {self._trigger_mode}")
         before = self._acquisition_count()
         self._write(":TRIGger:RUN")

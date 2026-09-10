@@ -32,6 +32,12 @@ Read `docs/architecture.md` before changing the data model. In short:
 - Vendor SDKs (`spcm`, `spcm-core`, `pyvisa`, `pyvisa-py`) are hard deps but
   imported lazily inside `scopes/` so core import and CI need no hardware.
 - `pyspcm` is not on PyPI; use `spcm` / `spcm_core` instead.
+- Siglent gotcha: `:SYSTem:SELFCal` is **asynchronous** — it returns immediately
+  and `*OPC?` is `1` at once, so it is *not* a completion signal (the front
+  panel shows progress). While it runs, waveform queries are unreliable and
+  `:ACQuire:NUMACq?` may stop advancing. Also expect deterministic ADC
+  interleave spurs at `fs/8`, `fs/4`, `fs/2` on every channel (including open
+  ones); analyze a band/tone rather than the global FFT peak.
 
 ## Toolchain
 

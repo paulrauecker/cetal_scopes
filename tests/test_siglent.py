@@ -394,6 +394,8 @@ def test_socket_transport_roundtrip() -> None:
                     command = line.decode().strip()
                     if command == "*IDN?":
                         conn.sendall(b"IDN,OK\n")
+                    elif command == ":ACQuire:NUMACq?":
+                        conn.sendall(b"\n42\n")
                     elif command == ":WAVeform:DATA?":
                         payload = b"\x01\x02\x03"
                         conn.sendall(b"#1" + b"3" + payload + b"\n")
@@ -411,6 +413,7 @@ def test_socket_transport_roundtrip() -> None:
     transport = _SocketTransport("127.0.0.1", port, 1.0)
     transport.open()
     assert transport.query("*IDN?") == "IDN,OK"
+    assert transport.query(":ACQuire:NUMACq?") == "42"
     assert transport.query_block(":WAVeform:DATA?") == b"\x01\x02\x03"
     assert transport.query_block(":WAVeform:MAXPoint?") == b"1000"
     transport.write(":TRIGger:RUN")
