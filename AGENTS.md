@@ -6,11 +6,11 @@ Early scaffold. `Capture` and `Channel` (the core container) are implemented in
 `src/cetal_scopes/{capture,channel}.py` and exported from `__init__.py`; the
 `Scope` driver template lives in `src/cetal_scopes/scopes/base.py`. The Siglent
 SDS6204L driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket
-LAN interface with a lazy PyVISA fallback for USB/VXI-11; it has not been
-validated against hardware. The metadata, antenna and I/O pieces described in
-`docs/architecture.md` are **not implemented yet**. Treat docs and docstrings as
-design intent, not current behavior — verify against source before relying on
-them.
+LAN interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
+against an SDS6204L over LAN (single-channel capture). The metadata, antenna and
+I/O pieces described in `docs/architecture.md` are **not implemented yet**. Treat
+docs and docstrings as design intent, not current behavior — verify against
+source before relying on them.
 
 ## Architecture
 

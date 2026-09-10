@@ -30,7 +30,7 @@ def make_descriptor(
     code_per_div: float = 25.0,
     interval: float = 1e-9,
     delay: float = 0.0,
-    tdiv_index: int = 8,
+    tdiv_index: int = 9,
     probe: float = 1.0,
 ) -> bytes:
     buf = bytearray(346)
@@ -62,12 +62,15 @@ class FakeTransport:
         idn: str = "Siglent Technologies,SDS6204L,TEST,1.0",
         max_points: str = "1000",
         status: str = "Stop",
+        advance_on_run: bool = True,
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
         self.idn = idn
         self.max_points = max_points
         self.status = status
+        self.advance_on_run = advance_on_run
+        self.num_acq = 0
         self.opened = False
         self.closed = False
         self.written: list[str] = []
@@ -81,6 +84,8 @@ class FakeTransport:
 
     def write(self, command: str) -> None:
         self.written.append(command)
+        if command == ":TRIGger:RUN" and self.advance_on_run:
+            self.num_acq += 1
 
     def query(self, command: str) -> str:
         self.queried.append(command)
@@ -88,6 +93,8 @@ class FakeTransport:
             return self.idn
         if command == ":WAVeform:MAXPoint?":
             return self.max_points
+        if command == ":ACQuire:NUMACq?":
+            return str(self.num_acq)
         if command == ":TRIGger:STATus?":
             return self.status
         raise AssertionError(f"unexpected query {command!r}")
@@ -308,11 +315,20 @@ def test_duplicate_channels_rejected() -> None:
 
 
 def test_acquire_times_out_without_trigger() -> None:
-    fake = FakeTransport(make_descriptor(), [], status="Auto")
+    fake = FakeTransport(make_descriptor(), [], advance_on_run=False)
     scope = SiglentSDS6204L(channels=("C1",), transport=fake, acquire_timeout=0.0)
     scope.connect()
     with pytest.raises(TimeoutError):
         scope.acquire()
+
+
+def test_acquire_honors_trigger_mode() -> None:
+    scope, fake = make_driver()
+    scope.trigger_mode = "AUTO"
+    scope.connect()
+    scope.acquire()
+    assert ":TRIGger:MODE AUTO" in fake.written
+    assert ":TRIGger:STOP" in fake.written
 
 
 def test_configure_rejects_non_mapping_trigger() -> None:

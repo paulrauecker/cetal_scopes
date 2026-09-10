@@ -43,12 +43,17 @@ _CONFIG_KEYS = frozenset(
         "acquire_type",
         "memory_depth",
         "trigger",
+        "trigger_mode",
         "vertical",
     }
 )
 
 # Timebase enumeration: :WAVeform:PREamble? stores the index, not seconds/div.
+# Empirically verified against an SDS6204L (firmware 18.36.11.2.0.3.7): the
+# sequence starts at 100 ps, one step below the 200 ps that the programming
+# guide's table begins at, so the guide's indices are off by one.
 TDIV_ENUM: tuple[float, ...] = (
+    100e-12,
     200e-12,
     500e-12,
     1e-9,
@@ -442,6 +447,10 @@ class SiglentSDS6204L(Scope):
         Socket timeout in seconds.
     acquire_timeout : float, optional
         Maximum seconds to wait for a triggered acquisition to finish.
+    trigger_mode : str, optional
+        Sweep mode used by :meth:`acquire` (``"SINGle"``, ``"AUTO"``,
+        ``"NORMal"``). Defaults to ``"SINGle"``; use ``"AUTO"`` on the bench
+        when no trigger signal is present.
     grid_num : int, optional
         Horizontal grid divisions; ``10`` for SDS benchtop models.
     transport : _Transport, optional
@@ -456,6 +465,7 @@ class SiglentSDS6204L(Scope):
         port: int = DEFAULT_PORT,
         timeout: float = 5.0,
         acquire_timeout: float = 10.0,
+        trigger_mode: str = "SINGle",
         grid_num: int = GRID_NUM,
         transport: _Transport | None = None,
     ) -> None:
@@ -463,6 +473,7 @@ class SiglentSDS6204L(Scope):
         self._port = port
         self._timeout = timeout
         self._acquire_timeout = acquire_timeout
+        self._trigger_mode = trigger_mode
         self._grid_num = grid_num
         self._channels = _normalize_channels(channels)
         self._transport = transport
@@ -474,6 +485,15 @@ class SiglentSDS6204L(Scope):
     def idn(self) -> str:
         """Instrument identification string from ``*IDN?``."""
         return self._idn
+
+    @property
+    def trigger_mode(self) -> str:
+        """Sweep mode used by :meth:`acquire`."""
+        return self._trigger_mode
+
+    @trigger_mode.setter
+    def trigger_mode(self, value: str) -> None:
+        self._trigger_mode = value
 
     @property
     def channels(self) -> tuple[str, ...]:
@@ -528,6 +548,8 @@ class SiglentSDS6204L(Scope):
             self.set_acquire_type(str(settings["acquire_type"]))
         if "memory_depth" in settings:
             self.set_memory_depth(str(settings["memory_depth"]))
+        if "trigger_mode" in settings:
+            self._trigger_mode = str(settings["trigger_mode"])
 
         trigger = settings.get("trigger")
         if trigger is not None:
@@ -612,7 +634,11 @@ class SiglentSDS6204L(Scope):
         self._write(f":ACQuire:MDEPth {depth}")
 
     def acquire(self) -> Capture:
-        """Arm a single acquisition, wait for it, and fetch the channels.
+        """Arm an acquisition, wait for it, and fetch the channels.
+
+        The sweep mode comes from :attr:`trigger_mode` (default ``"SINGle"``).
+        Completion is detected via the ``:ACQuire:NUMACq?`` counter, then the
+        scope is stopped so the fetched buffer is a coherent snapshot.
 
         Returns
         -------
@@ -621,9 +647,11 @@ class SiglentSDS6204L(Scope):
             sharing the first channel's timebase.
         """
         self._require_connected()
-        self._write(":TRIGger:MODE SINGle")
+        self._write(f":TRIGger:MODE {self._trigger_mode}")
+        before = self._acquisition_count()
         self._write(":TRIGger:RUN")
-        self._wait_for_acquisition()
+        self._wait_for_acquisition(before)
+        self._write(":TRIGger:STOP")
 
         volts_rows: list[NDArray[np.float64]] = []
         raw_rows: list[NDArray[Any]] = []
@@ -689,10 +717,13 @@ class SiglentSDS6204L(Scope):
         codes = np.concatenate(chunks)[:total] if chunks else np.empty(0, dtype)
         return codes, desc
 
-    def _wait_for_acquisition(self) -> None:
+    def _acquisition_count(self) -> int:
+        return int(float(self._query(":ACQuire:NUMACq?")))
+
+    def _wait_for_acquisition(self, before: int) -> None:
         deadline = time.monotonic() + self._acquire_timeout
         while time.monotonic() < deadline:
-            if self._query(":TRIGger:STATus?").strip().lower() == "stop":
+            if self._acquisition_count() > before:
                 return
             time.sleep(0.05)
         raise TimeoutError(
