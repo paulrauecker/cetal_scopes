@@ -113,6 +113,10 @@ first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
 - Vendor SDKs are hard dependencies but must be imported **lazily inside
   `scopes/`** so that `import cetal_scopes` and CI do not require hardware or a
   vendor driver to be present.
+- `pyvisa` + `pyvisa-py` are declared and used by the Siglent driver's VISA
+  fallback (USB / VXI-11); the raw-socket LAN path needs only the stdlib.
+  `pyvisa` is imported lazily inside `_VisaTransport.open()`.
+- `spcm` / `spcm-core` are still to be added for the Spectrum driver.
 - `pyspcm` is **not** on PyPI and cannot be a pip dependency. The pip-installable
   low-level API is `spcm-core` (import `spcm_core`); the high-level API is
   `spcm` (which depends on `spcm-core`). Use these instead of `pyspcm`.
@@ -121,8 +125,10 @@ first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
 
 1. **Core container** — `Antenna`, `Channel`, `Capture`, `Shot`, pydantic
    metadata, `load_capture` / `save_capture`, the `Scope` ABC (no concrete
-   driver yet), tests, docs.
-2. **Siglent SDS6204L driver** producing a `Capture`.
+   driver yet), tests, docs. *(Capture/Channel + Scope ABC done; metadata,
+   antenna and I/O pending.)*
+2. **Siglent SDS6204L driver** producing a `Capture`. *(LAN raw socket + VISA
+   fallback done; verify against hardware.)*
 3. **Spectrum M5i.3367-x16 driver** over `spcm` / `spcm_core`.
 4. Documentation finalization.
 
