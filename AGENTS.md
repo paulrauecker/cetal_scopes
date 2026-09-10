@@ -4,8 +4,9 @@
 
 Early scaffold. `Capture` and `Channel` (the core container) are implemented in
 `src/cetal_scopes/{capture,channel}.py` and exported from `__init__.py`; the
-metadata, antenna, I/O and `Scope` pieces described in `docs/architecture.md`
-are **not implemented yet**. Treat docs and docstrings as design intent, not
+`Scope` driver template lives in `src/cetal_scopes/scopes/base.py`. The
+metadata, antenna and I/O pieces described in `docs/architecture.md` are
+**not implemented yet**. Treat docs and docstrings as design intent, not
 current behavior — verify against source before relying on them.
 
 ## Architecture
