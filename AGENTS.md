@@ -7,10 +7,12 @@ Early scaffold. `Capture` and `Channel` (the core container) are implemented in
 `Scope` driver template lives in `src/cetal_scopes/scopes/base.py`. The Siglent
 SDS6204L driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket
 LAN interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
-against an SDS6204L over LAN (single-channel capture). The metadata, antenna and
-I/O pieces described in `docs/architecture.md` are **not implemented yet**. Treat
-docs and docstrings as design intent, not current behavior — verify against
-source before relying on them.
+against an SDS6204L over LAN (single-channel capture). A downstream
+`cetal_scopes.analysis` subpackage (time / spectral / analytic / metrics plus
+result classes) and `cetal_scopes.plotting` are implemented. The metadata,
+antenna and I/O pieces described in `docs/architecture.md` are **not implemented
+yet**. Treat docs and docstrings as design intent, not current behavior — verify
+against source before relying on them.
 
 ## Architecture
 
@@ -23,6 +25,9 @@ Read `docs/architecture.md` before changing the data model. In short:
 - `Channel` is a row-view of the Capture arrays plus an `Antenna` (persisted
   inline); `time` is derived (`t0 + arange(n) * dt`), never stored.
 - `Shot` only groups `Capture`s in memory; it is not persisted.
+- `cetal_scopes.analysis` (`time`, `spectral`, `analytic`, `metrics`, `results`)
+  operates on `Channel`s and returns `Spectrum`/`ChannelStats`; it never mutates
+  captures. `cetal_scopes.plotting` draws captures and spectra with matplotlib.
 - On disk: `<stem>.json` + `<stem>.volts.npy` + `<stem>.raw.npy`.
 - Vendor SDKs (`spcm`, `spcm-core`, `pyvisa`, `pyvisa-py`) are hard deps but
   imported lazily inside `scopes/` so core import and CI need no hardware.

@@ -8,10 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.11.1",
     "numpy>=2.5.2",
     "pydantic>=2.13.4",
     "pyvisa>=1.16.2",
     "pyvisa-py>=0.8.1",
+    "scipy>=1.18.1",
 ]
 
 [build-system]
