@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["ChannelStats", "Spectrum"]
+__all__ = ["ChannelStats", "Spectrum", "Tone"]
 
 
 @dataclass(frozen=True, eq=False)
@@ -74,3 +74,27 @@ class ChannelStats:
     peak_to_peak: float
     peak_value: float
     peak_time: float
+
+
+@dataclass(frozen=True)
+class Tone:
+    """A tone coherently detected at a known reference frequency.
+
+    Attributes
+    ----------
+    frequency : float
+        Reference frequency in Hz used for detection.
+    amplitude : float
+        Peak amplitude in volts.
+    phase : float
+        Phase in radians, relative to the channel's time axis.
+    """
+
+    frequency: float
+    amplitude: float
+    phase: float
+
+    @property
+    def phase_deg(self) -> float:
+        """Phase in degrees."""
+        return float(np.degrees(self.phase))

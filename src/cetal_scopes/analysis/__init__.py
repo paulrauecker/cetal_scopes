@@ -18,8 +18,13 @@ from cetal_scopes.analysis.analytic import (
     instantaneous_phase,
 )
 from cetal_scopes.analysis.metrics import stats
-from cetal_scopes.analysis.results import ChannelStats, Spectrum
-from cetal_scopes.analysis.spectral import fft, window_values
+from cetal_scopes.analysis.results import ChannelStats, Spectrum, Tone
+from cetal_scopes.analysis.spectral import (
+    band_amplitude,
+    fft,
+    tone_amplitude,
+    window_values,
+)
 from cetal_scopes.analysis.time import (
     detrend,
     gate,
@@ -30,7 +35,9 @@ from cetal_scopes.analysis.time import (
 __all__ = [
     "ChannelStats",
     "Spectrum",
+    "Tone",
     "analytic_signal",
+    "band_amplitude",
     "detrend",
     "envelope",
     "fft",
@@ -40,5 +47,6 @@ __all__ = [
     "resample",
     "stats",
     "subtract_baseline",
+    "tone_amplitude",
     "window_values",
 ]
