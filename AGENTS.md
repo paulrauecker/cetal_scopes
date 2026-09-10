@@ -2,11 +2,11 @@
 
 ## Project status
 
-Early scaffold. `src/cetal_scopes/__init__.py` only defines `hello()`. The
-agreed architecture is recorded in `docs/architecture.md`; the API it describes
-(`Capture`, `Channel`, `Antenna`, `Scope`, `load_capture`, `save_capture`) is
-**not implemented yet**. Treat docs and docstrings as design intent, not current
-behavior — verify against source before relying on them.
+Early scaffold. `Capture` and `Channel` (the core container) are implemented in
+`src/cetal_scopes/{capture,channel}.py` and exported from `__init__.py`; the
+metadata, antenna, I/O and `Scope` pieces described in `docs/architecture.md`
+are **not implemented yet**. Treat docs and docstrings as design intent, not
+current behavior — verify against source before relying on them.
 
 ## Architecture
 
@@ -39,7 +39,7 @@ Setup first: `uv sync --all-groups` (direnv runs this automatically in the shell
 - Format: `uv run ruff format src tests` (CI enforces `--check`)
 - Typecheck: `uv run pyright src`
 - Test: `uv run pytest`
-  - Single test: `uv run pytest tests/test_placeholder.py::test_package_importable`
+  - Single test: `uv run pytest tests/test_capture.py::test_default_channel_names_and_shape`
 - Docs preview: `uv run mkdocs serve` (build: `uv run mkdocs build`, output `site/`)
 
 There is no ruff/pyright config; defaults apply (ruff line length 88, double
