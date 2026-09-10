@@ -22,6 +22,11 @@ The `tdiv` field at offset `0x144` indexes the timebase table. On this firmware
 the table starts at **100 ps**, one step below the 200 ps that the programming
 guide's table begins at — the guide's indices are off by one.
 
+Block responses may carry a prefix (e.g. `C1:WF DAT2,` before the `#9<length>`
+header) and stray blank lines can appear between responses; the transport skips
+both. A zero-length block (`#9000000000`) or a short payload means the waveform
+is not ready — `_fetch_codes` raises rather than returning garbage.
+
 ## Gotchas
 
 - **Self-calibration is asynchronous and slow, with no reliable SCPI status.**

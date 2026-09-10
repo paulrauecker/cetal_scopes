@@ -239,6 +239,14 @@ def test_acquire_uses_word_width_for_hd_adc() -> None:
     assert ":WAVeform:BYTeorder LSB" in fake.written
 
 
+def test_acquire_rejects_short_waveform_block() -> None:
+    fake = FakeTransport(make_descriptor(frame_points=3), [np.array([], dtype=np.int8)])
+    scope = SiglentSDS6204L(channels=("C1",), transport=fake)
+    scope.connect()
+    with pytest.raises(RuntimeError, match="waveform not ready"):
+        scope.acquire()
+
+
 def test_configure_applies_settings() -> None:
     scope, fake = make_driver()
     scope.connect()
@@ -398,7 +406,7 @@ def test_socket_transport_roundtrip() -> None:
                         conn.sendall(b"\n42\n")
                     elif command == ":WAVeform:DATA?":
                         payload = b"\x01\x02\x03"
-                        conn.sendall(b"#1" + b"3" + payload + b"\n")
+                        conn.sendall(b"\nC1:WF DAT2," + b"#1" + b"3" + payload + b"\n")
                     else:
                         conn.sendall(b"1000\n")
 

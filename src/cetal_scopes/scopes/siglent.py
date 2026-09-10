@@ -320,25 +320,30 @@ class _SocketTransport:
         del self._buffer[:size]
         return data
 
+    def _read_line_bytes(self) -> bytes:
+        while b"\n" not in self._buffer:
+            self._receive()
+        line, _, remainder = self._buffer.partition(b"\n")
+        self._buffer = bytearray(remainder)
+        return bytes(line)
+
     def _read_line(self) -> str:
         while True:
-            while b"\n" not in self._buffer:
-                self._receive()
-            line, _, remainder = self._buffer.partition(b"\n")
-            self._buffer = bytearray(remainder)
-            text = line.decode("ascii", errors="replace").strip()
+            text = self._read_line_bytes().decode("ascii", errors="replace").strip()
             if text:
                 return text
 
     def _read_block(self) -> bytes:
-        while not self._buffer:
+        while True:
+            while self._buffer[:1] in (b"\n", b"\r"):
+                del self._buffer[:1]
+            if b"#" in self._buffer:
+                break
+            if b"\n" in self._buffer:
+                return self._read_line_bytes()
             self._receive()
-        while self._buffer[:1] in (b"\n", b"\r"):
-            del self._buffer[:1]
-            if not self._buffer:
-                self._receive()
-        if self._buffer[:1] != b"#":
-            return self._read_line().encode("ascii")
+        hash_at = self._buffer.find(b"#")
+        del self._buffer[:hash_at]
         self._read_exact(1)
         digit_bytes = self._read_exact(1)
         if not digit_bytes.isdigit():
@@ -715,6 +720,11 @@ class SiglentSDS6204L(Scope):
             self._write(f":WAVeform:POINt {count}")
             payload = self._query_block(":WAVeform:DATA?")
             usable = count * bytes_per_sample
+            if len(payload) < usable:
+                raise RuntimeError(
+                    f"scope returned {len(payload)} bytes for {count} points "
+                    f"({usable} expected); waveform not ready: {payload[:40]!r}"
+                )
             chunks.append(np.frombuffer(payload[:usable], dtype=dtype))
             start += count
 
