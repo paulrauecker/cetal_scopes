@@ -1,5 +1,8 @@
 # API Reference
 
-::: cetal_scopes
-<!-- ::: cetal_scopes.container -->
-<!-- ::: cetal_scopes.metadata -->
+Generated from the source docstrings and grouped by area:
+
+- [Core containers](core.md) — `Capture` and `Channel`.
+- [Instrument drivers](drivers.md) — the `Scope` template and vendor drivers.
+- [Analysis](analysis.md) — time, spectral, analytic and metric operations.
+- [Plotting](plotting.md) — matplotlib helpers.

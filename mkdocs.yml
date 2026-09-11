@@ -5,30 +5,77 @@ theme:
   name: material
   features:
     - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
     - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
 
-# nav:
-#   - Home: index.md
-#   - Getting Started: getting-started.md
-#   - Format Spec: format-spec.md
-#   - Oscilloscopes: scopes/
-#   - API Reference: api/reference.md
-#
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture: architecture.md
+  - Format Spec: format-spec.md
+  - Oscilloscopes:
+      - Spectrum M5i.3367-x16:
+          - Overview: scopes/M5i.3367-x16/index.md
+          - Native API: scopes/M5i.3367-x16/code.md
+      - Siglent SDS6204L:
+          - Overview: scopes/SDS6204L/index.md
+          - Native API: scopes/SDS6204L/code.md
+  - API Reference:
+      - Overview: api/reference.md
+      - Core containers: api/core.md
+      - Instrument drivers: api/drivers.md
+      - Analysis: api/analysis.md
+      - Plotting: api/plotting.md
+
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
           options:
-            docstring_style: numpy   # matches your docstring convention
+            docstring_style: numpy
+            # Headings / navigation
+            show_root_heading: true
+            show_root_full_path: false
+            show_root_members_full_path: false
+            show_object_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_labels: true
+            heading_level: 2
+            # Signatures
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            # Members
+            members_order: source
+            filters: ["!^_"]
+            show_if_no_docstring: false
+            inherited_members: true
+            merge_init_into_class: true
+            group_by_category: true
+            show_category_heading: true
+            docstring_section_style: list
+            # Source
+            show_source: true
+            show_bases: true
 
 markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
   - admonition        # nice callout boxes: !!! note / !!! warning
+  - attr_list
+  - md_in_html
   - pymdownx.highlight # syntax highlighting
   - pymdownx.superfences
 
+watch:
+  - src
 
 extra_javascript:
   - javascripts/mathjax.js
