@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from cetal_scopes.antenna import Antenna
+
 __all__ = ["Channel"]
 
 
@@ -32,6 +34,9 @@ class Channel:
     raw : numpy.ndarray, optional
         Raw ADC codes for the same samples, shape ``(n_samples,)``. ``None``
         when the driver only exposes converted data.
+    antenna : Antenna, optional
+        The physical sensor attached to this channel, persisted with the
+        capture. ``None`` when the sensor is unknown.
 
     Attributes
     ----------
@@ -44,6 +49,7 @@ class Channel:
     t0: float
     dt: float
     raw: NDArray[Any] | None = None
+    antenna: Antenna | None = None
 
     @property
     def n_samples(self) -> int:

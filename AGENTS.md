@@ -2,19 +2,22 @@
 
 ## Project status
 
-Early scaffold. `Capture` and `Channel` (the core container) are implemented in
-`src/cetal_scopes/{capture,channel}.py` and exported from `__init__.py`; the
-`Scope` driver template lives in `src/cetal_scopes/scopes/base.py`. The Siglent
-SDS6204L driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket
-LAN interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
+Early scaffold. `Capture`, `Channel`, `Antenna` (with a frequency-dependent
+`TransferFunction`) live in `src/cetal_scopes/{capture,channel,antenna}.py` and
+are exported from `__init__.py`; the pydantic `CaptureFile` schema is in
+`metadata.py` and `load_capture` / `save_capture` in `storage.py`. The `Scope`
+driver template lives in `src/cetal_scopes/scopes/base.py`. The Siglent SDS6204L
+driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket LAN
+interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
 against an SDS6204L over LAN (single-channel capture). A downstream
 `cetal_scopes.analysis` subpackage (time / spectral / analytic / metrics plus
 result classes) and `cetal_scopes.plotting` are implemented. Downstream
 applications live in `apps/` (currently a real-time signal/FFT viewer); they are
-not part of the library. The metadata, antenna and I/O pieces described in
-`docs/architecture.md` are **not implemented yet**. Treat docs and docstrings as
-design intent, not current behavior — verify against source before relying on
-them.
+not part of the library. `Shot` groups captures with per-capture time offsets
+and is in-memory only; the antenna-aware analysis helpers (turning a calibrated
+B-dot's volts into a field) described in `docs/architecture.md` are **not
+implemented yet**. Treat docs and docstrings as design intent, not current
+behavior — verify against source before relying on them.
 
 ## Architecture
 
@@ -26,7 +29,8 @@ Read `docs/architecture.md` before changing the data model. In short:
   `channels: dict[str, Channel]`.
 - `Channel` is a row-view of the Capture arrays plus an `Antenna` (persisted
   inline); `time` is derived (`t0 + arange(n) * dt`), never stored.
-- `Shot` only groups `Capture`s in memory; it is not persisted.
+- `Shot` groups `Capture`s in memory with per-capture time offsets; it is not
+  persisted.
 - `cetal_scopes.analysis` (`time`, `spectral`, `analytic`, `metrics`, `results`)
   operates on `Channel`s and returns `Spectrum`/`ChannelStats`; it never mutates
   captures. `cetal_scopes.plotting` draws captures and spectra with matplotlib.

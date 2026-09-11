@@ -1,8 +1,10 @@
 # Architecture (agreed design)
 
-Status of this document: **decided, not yet implemented.** It records the
-architecture agreed with the team so future work does not have to re-litigate
-it. Once code lands, keep this in sync with the source.
+Status of this document: **implemented (milestone 1).** The core containers
+(`Antenna`, `Channel`, `Capture`, `Shot`), the pydantic `CaptureFile` schema and
+`load_capture` / `save_capture` are implemented, along with cross-correlation
+time alignment in `cetal_scopes.analysis`. Keep this in sync with the source as
+it lands.
 
 ## Goal
 
@@ -23,7 +25,7 @@ Capture                       acquisition result + persistence unit
  ├─ raw   (n_channels, n_samples)   ADC codes
  ├─ volts (n_channels, n_samples)   float64, volts
  ├─ t0, dt                         shared timebase (seconds)
- ├─ metadata: CaptureMetadata
+ ├─ metadata: dict                 free-form provenance
  └─ channels: dict[str, Channel]
         │
         ▼
@@ -51,8 +53,9 @@ Responsibilities:
 - **`Antenna`** — the physical detector/sensor attached to a channel
   (sensitivity, orientation, cable delay, calibration). Used by analysis to
   turn volts into physical units.
-- **`Shot`** — groups several `Capture`s belonging to one experiment. It is an
-  in-memory convenience only; it is not persisted.
+- **`Shot`** — groups several `Capture`s belonging to one experiment, each under
+  a label, together with a scalar per-capture time offset that maps them onto a
+  common axis. It is an in-memory convenience only; it is not persisted.
 
 ## Data model decisions
 
@@ -76,8 +79,8 @@ Responsibilities:
 A capture is a JSON metadata file plus NumPy sidecars:
 
 ```
-<stem>.json        # CaptureMetadata + per-channel metadata + inline antennas
-                   #   + sidecar filenames + channel order + format_version
+<stem>.json        # CaptureFile: timing + per-channel metadata + inline
+                   #   antennas + sidecar filenames + channel order + version
 <stem>.volts.npy   # float64, shape (n_channels, n_samples)
 <stem>.raw.npy     # native code dtype, same shape (omitted when raw is None)
 ```
@@ -125,8 +128,8 @@ first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
 
 1. **Core container** — `Antenna`, `Channel`, `Capture`, `Shot`, pydantic
    metadata, `load_capture` / `save_capture`, the `Scope` ABC (no concrete
-   driver yet), tests, docs. *(Capture/Channel + Scope ABC done; metadata,
-   antenna and I/O pending.)*
+   driver yet), tests, docs. *(All done, including per-capture time offsets and
+   the cross-correlation estimator in `cetal_scopes.analysis`.)*
 2. **Siglent SDS6204L driver** producing a `Capture`. *(LAN raw socket + VISA
    fallback done; verify against hardware.)*
 3. **Spectrum M5i.3367-x16 driver** over `spcm` / `spcm_core`.

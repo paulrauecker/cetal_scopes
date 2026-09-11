@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cetal_scopes import Capture, Channel
+from cetal_scopes import Antenna, Capture, Channel
 
 
 def test_default_channel_names_and_shape() -> None:
@@ -93,3 +93,58 @@ def test_dt_must_be_positive_and_finite(dt: float) -> None:
 def test_t0_must_be_finite() -> None:
     with pytest.raises(ValueError, match="t0 must be finite"):
         Capture(volts=np.zeros((1, 2)), t0=float("nan"), dt=1.0)
+
+
+def test_antennas_are_attached_to_channels() -> None:
+    antenna = Antenna(name="Bdot-X", kind="b-dot")
+    capture = Capture(
+        volts=np.zeros((2, 3)),
+        t0=0.0,
+        dt=1.0,
+        channel_names=("C1", "C2"),
+        antennas={"C2": antenna},
+    )
+    assert capture["C1"].antenna is None
+    assert capture["C2"].antenna is antenna
+    assert capture.antennas == {"C2": antenna}
+
+
+def test_antennas_for_unknown_channel_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown channels"):
+        Capture(
+            volts=np.zeros((1, 3)),
+            t0=0.0,
+            dt=1.0,
+            antennas={"NOPE": Antenna(name="probe")},
+        )
+
+
+def test_default_antennas_and_metadata() -> None:
+    capture = Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1.0)
+    assert capture.antennas == {}
+    assert capture.metadata == {}
+
+
+def test_with_antennas_merges_and_shares_data() -> None:
+    capture = Capture(
+        volts=np.arange(6, dtype=float).reshape(2, 3),
+        t0=0.0,
+        dt=1.0,
+        channel_names=("C1", "C2"),
+        antennas={"C1": Antenna(name="A")},
+        metadata={"instrument": "demo"},
+    )
+    antenna = Antenna(name="B", kind="b-dot")
+    annotated = capture.with_antennas({"C2": antenna})
+
+    assert capture["C2"].antenna is None
+    assert annotated["C1"].antenna is not None
+    assert annotated["C2"].antenna is antenna
+    assert annotated.metadata == {"instrument": "demo"}
+    assert np.shares_memory(annotated.volts, capture.volts)
+
+
+def test_with_antennas_rejects_unknown_channel() -> None:
+    capture = Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1.0)
+    with pytest.raises(ValueError, match="unknown channels"):
+        capture.with_antennas({"NOPE": Antenna(name="probe")})

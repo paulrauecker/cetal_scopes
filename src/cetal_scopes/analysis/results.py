@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["ChannelStats", "Spectrum", "Tone"]
+__all__ = ["ChannelStats", "Spectrum", "TimeOffset", "Tone"]
 
 
 @dataclass(frozen=True, eq=False)
@@ -98,3 +98,33 @@ class Tone:
     def phase_deg(self) -> float:
         """Phase in degrees."""
         return float(np.degrees(self.phase))
+
+
+@dataclass(frozen=True)
+class TimeOffset:
+    """A lag measured between two channels by cross-correlation.
+
+    Attributes
+    ----------
+    offset : float
+        Seconds to add to the signal channel's time axis to align it with the
+        reference channel.
+    correlation : float
+        Normalized peak correlation in ``[-1, 1]``. A negative value means the
+        two signals are inverted relative to each other.
+    inverted : bool
+        ``True`` when :attr:`correlation` is negative.
+    max_lag : float
+        Half-width of the searched lag range, in seconds.
+    """
+
+    offset: float
+    correlation: float
+    inverted: bool
+    max_lag: float
+
+    def __repr__(self) -> str:
+        return (
+            f"TimeOffset(offset={self.offset!r}, "
+            f"correlation={self.correlation!r}, inverted={self.inverted!r})"
+        )

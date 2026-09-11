@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cetal_scopes import Channel
+from cetal_scopes import Antenna, Channel
 from cetal_scopes.analysis import (
     detrend,
     gate,
@@ -147,3 +147,16 @@ def test_remove_adc_comb_rejects_bad_period() -> None:
 def test_remove_adc_comb_rejects_short_channel() -> None:
     with pytest.raises(ValueError, match="shorter than one comb period"):
         remove_adc_comb(make_channel([1, 2, 3]), period=8)
+
+
+def test_processing_preserves_antenna() -> None:
+    antenna = Antenna(name="Bdot-X", kind="b-dot")
+    channel = Channel(name="CH1", volts=np.arange(5.0), t0=0.0, dt=1.0, antenna=antenna)
+    results = (
+        gate(channel, t_start=1.0, t_end=3.0),
+        subtract_baseline(channel),
+        detrend(channel),
+        resample(channel, dt=0.5),
+        remove_adc_comb(channel, period=2),
+    )
+    assert all(result.antenna is antenna for result in results)

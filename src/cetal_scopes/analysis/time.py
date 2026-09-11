@@ -50,6 +50,7 @@ def gate(
         t0=t0 + i0 * dt,
         dt=dt,
         raw=None if channel.raw is None else channel.raw[i0:i1],
+        antenna=channel.antenna,
     )
 
 
@@ -193,4 +194,5 @@ def resample(
         volts=volts.astype(np.float64),
         t0=channel.t0,
         dt=new_dt,
+        antenna=channel.antenna,
     )

@@ -19,11 +19,13 @@ def with_volts(channel: Channel, volts: NDArray[np.float64]) -> Channel:
     """Return a new channel with replaced voltages and no raw codes.
 
     Processed channels drop their ``raw`` codes because the samples no longer
-    correspond one-to-one with the recorded ADC values.
+    correspond one-to-one with the recorded ADC values. The antenna is carried
+    over, since the sensor identity is unchanged by processing.
     """
     return Channel(
         name=channel.name,
         volts=volts,
         t0=channel.t0,
         dt=channel.dt,
+        antenna=channel.antenna,
     )

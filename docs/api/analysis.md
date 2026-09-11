@@ -2,6 +2,8 @@
 
 ::: cetal_scopes.analysis.time
 
+::: cetal_scopes.analysis.alignment
+
 ::: cetal_scopes.analysis.spectral
 
 ::: cetal_scopes.analysis.analytic

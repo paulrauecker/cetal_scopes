@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from cetal_scopes.antenna import Antenna
 from cetal_scopes.channel import Channel
 
 __all__ = ["Capture"]
@@ -42,11 +43,16 @@ class Capture:
     raw : numpy.ndarray, optional
         Raw ADC codes, shape ``(n_channels, n_samples)``. ``None`` when only
         converted data is available.
+    antennas : mapping of str to Antenna, optional
+        Sensors keyed by channel name. Names not present in ``channel_names``
+        are rejected. Unmapped channels get ``None``.
+    metadata : dict, optional
+        Free-form provenance (instrument, timestamp, notes), persisted verbatim.
 
     Attributes
     ----------
     channels : dict of str to Channel
-        Maps each channel name to its row-view.
+        Maps each channel name to its row-view, carrying its antenna.
     """
 
     volts: NDArray[np.float64]
@@ -54,6 +60,8 @@ class Capture:
     dt: float
     channel_names: tuple[str, ...] | None = None
     raw: NDArray[Any] | None = None
+    antennas: Mapping[str, Antenna] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     channels: dict[str, Channel] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -83,6 +91,7 @@ class Capture:
             raise ValueError(f"dt must be positive and finite, got {self.dt!r}")
 
         self._set_channel_names(volts.shape[0])
+        self._set_antennas()
         self.channels = self._build_channels()
 
     def _set_channel_names(self, n_channels: int) -> None:
@@ -101,9 +110,21 @@ class Capture:
             raise ValueError(f"channel names must be unique, got {names!r}")
         self.channel_names = names
 
+    def _set_antennas(self) -> None:
+        if self.channel_names is None:  # pragma: no cover - set just above
+            raise RuntimeError("channel names not initialized")
+        antennas = {} if self.antennas is None else dict(self.antennas)
+        unknown = set(antennas) - set(self.channel_names)
+        if unknown:
+            raise ValueError(
+                f"antennas given for unknown channels: {sorted(unknown)!r}"
+            )
+        self.antennas = antennas
+
     def _build_channels(self) -> dict[str, Channel]:
         if self.channel_names is None:  # pragma: no cover - set just above
             raise RuntimeError("channel names not initialized")
+        antennas = self.antennas or {}
         return {
             name: Channel(
                 name=name,
@@ -111,9 +132,28 @@ class Capture:
                 t0=self.t0,
                 dt=self.dt,
                 raw=None if self.raw is None else self.raw[i],
+                antenna=antennas.get(name),
             )
             for i, name in enumerate(self.channel_names)
         }
+
+    def with_antennas(self, antennas: Mapping[str, Antenna]) -> Capture:
+        """Return a copy of this capture with ``antennas`` merged in.
+
+        Channel views are rebuilt, so a driver-produced capture can be
+        annotated with its sensors without touching the waveform data.
+        """
+        merged = dict(self.antennas or {})
+        merged.update(antennas)
+        return Capture(
+            volts=self.volts,
+            t0=self.t0,
+            dt=self.dt,
+            channel_names=self.channel_names,
+            raw=self.raw,
+            antennas=merged,
+            metadata=dict(self.metadata),
+        )
 
     @property
     def n_channels(self) -> int:
