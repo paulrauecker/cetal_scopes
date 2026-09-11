@@ -247,6 +247,42 @@ def test_acquire_rejects_short_waveform_block() -> None:
         scope.acquire()
 
 
+def test_acquire_clamps_to_returned_screen_points() -> None:
+    descriptor = make_descriptor(frame_points=100)
+    data = [np.array([1, 2, 3, 4], dtype=np.int8)]
+    scope, _ = make_driver(
+        ("C1",), descriptor=descriptor, data_arrays=data, max_points="1000"
+    )
+    scope.connect()
+    capture = scope.acquire()
+
+    assert capture.volts.shape == (1, 4)
+    assert capture.raw is not None
+    assert capture.raw.shape == (1, 4)
+
+
+def test_acquire_stops_when_a_chunk_is_short() -> None:
+    descriptor = make_descriptor(frame_points=10)
+    data = [np.array([1, 2], dtype=np.int8), np.array([3], dtype=np.int8)]
+    scope, fake = make_driver(
+        ("C1",), descriptor=descriptor, data_arrays=data, max_points="2"
+    )
+    scope.connect()
+    capture = scope.acquire()
+
+    assert capture.volts.shape == (1, 3)
+    assert ":WAVeform:STARt 2" in fake.written
+
+
+def test_acquire_rejects_partial_sample() -> None:
+    descriptor = make_descriptor(frame_points=3, adc_bit=12)
+    data = [np.array([1, 2, 3], dtype=np.uint8)]
+    scope, _ = make_driver(("C1",), descriptor=descriptor, data_arrays=data)
+    scope.connect()
+    with pytest.raises(RuntimeError, match="not a whole number"):
+        scope.acquire()
+
+
 def test_configure_applies_settings() -> None:
     scope, fake = make_driver()
     scope.connect()

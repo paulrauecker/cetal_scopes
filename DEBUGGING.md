@@ -1,8 +1,9 @@
 # DEBUGGING.md — session handoff
 
-Context for continuing work on `cetal_scopes`. Last session: built the Siglent
-driver, downstream analysis, and characterized the scope's ADC spurs. Working
-tree is clean; `main` at `81e6485`.
+Context for continuing work on `cetal_scopes`. Earlier session: built the Siglent
+driver, downstream analysis, and characterized the scope's ADC spurs. Latest
+session: fixed `_fetch_codes` for the memory-vs-screen point mismatch (unblocks
+the sample-rate sweep). Working tree has uncommitted changes on `main` (`fab7c4d`).
 
 ---
 
@@ -22,7 +23,9 @@ tree is clean; `main` at `81e6485`.
 
 ## Hardware facts
 
-- Instrument: **Siglent SDS6204L**, LAN raw socket `192.168.5.193:5025`.
+- Instrument: **Siglent SDS6204L**, LAN raw socket. The address is DHCP and has
+  moved; it is currently **`192.168.5.197:5025`** (the driver's
+  `DEFAULT_ADDRESS` still says `.193`).
 - `*IDN?` → `Siglent Technologies,SDS6204L,SDS6LA3CA00028,18.36.11.2.0.3.7`.
 - Observed defaults on the bench unit: 1 V/div, 1 µs/div, **10 GS/s**,
   `:ACQuire:POINts?` = 100 000, `:ACQuire:MDEPth?` = 2.5M,
@@ -188,20 +191,16 @@ In `scopes/siglent.py` / `tests/test_siglent.py`:
    preamble. Now strips blanks before looking for `#`.
 6. `_fetch_codes` now validates payload length and raises instead of silently
    producing garbage.
+7. `_fetch_codes` no longer assumes `WAVEDESC.frame_points` (memory depth) equals
+   the points `DATA?` returns (screen points under `MMANagement FMDepth`). It
+   follows the payload length each chunk: a short chunk ends the record, and it
+   only raises on a zero-length first chunk ("waveform not ready") or a payload
+   that is not a whole number of samples. Unit-tested with the fake transport;
+   live `AUTO` capture still yields `(4, 100000)`.
 
 Also fixed earlier: `TDIV_ENUM` off-by-one; counter-based acquisition
 (`:ACQuire:NUMACq?` instead of trigger status); `trigger_mode` option
 (default `"SINGle"`, use `"AUTO"` on the bench).
-
----
-
-## Open issue to fix first
-
-**`_fetch_codes` assumes `WAVEDESC.one_frame_pts` == points returned by
-`DATA?`.** Under `MMANagement FMDepth` they differ (memory vs screen). Make it
-robust: use the transfer point count (e.g. `:WAVeform:POINt?` /
-`:ACQuire:POINts?`) or clamp to what `DATA?` actually returns, and only then
-raise. This blocks the sample-rate sweep below (which needs memory changes).
 
 ---
 
@@ -226,10 +225,11 @@ raise. This blocks the sample-rate sweep below (which needs memory changes).
 3. **Milestone 1 remainder:** `antenna.py` (id, sensitivity, orientation,
    cable delay, calibration), pydantic metadata, `io.py`
    (`load_capture`/`save_capture`, JSON + `.volts.npy` + `.raw.npy`), `shot.py`.
-4. **Sample-rate sweep (careful):** vary timebase with `MMANagement AUTO` only,
-   read `:ACQuire:SRATe?`, measure the open channel, and see whether a lower
-   `fs` moves/removes the fs/8 spur. Do **not** touch `MDEPth`/`MMANagement`
-   until the `_fetch_codes` fix above lands. 500 MHz needs ≳1.5 GS/s.
+4. **Sample-rate sweep:** vary timebase with `MMANagement AUTO` first, read
+   `:ACQuire:SRATe?`, measure the open channel, and see whether a lower `fs`
+   moves/removes the fs/8 spur. 500 MHz needs ≳1.5 GS/s. Now unblocked by the
+   `_fetch_codes` fix; `FMDepth` (fixed memory depth) can be tried next, which is
+   exactly the case that used to crash.
 5. Optional: `remove_spurs(spectrum, frequencies, half_width)` helper to mask
    known combs in broadband spectra; and learn a reusable ambient-spur list from
    the open C4.

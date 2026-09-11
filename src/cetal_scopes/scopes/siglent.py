@@ -697,6 +697,11 @@ class SiglentSDS6204L(Scope):
         self._write(":WAVeform:POINt 0")
         desc = parse_wavedesc(self._query_block(":WAVeform:PREamble?"))
 
+        # ``WAVEDESC.frame_points`` is the acquisition *memory* depth.  With
+        # ``:ACQuire:MMANagement FMDepth`` it can exceed the number of *screen*
+        # points that ``:WAVeform:DATA?`` will actually transfer (e.g. 2.5M vs
+        # 100k).  Treat it as an upper bound and follow the payload lengths the
+        # instrument hands back instead of assuming they match.
         total = desc.frame_points
         if total <= 0:
             return np.empty(0, dtype=np.int8), desc
@@ -719,17 +724,30 @@ class SiglentSDS6204L(Scope):
             self._write(f":WAVeform:STARt {start}")
             self._write(f":WAVeform:POINt {count}")
             payload = self._query_block(":WAVeform:DATA?")
-            usable = count * bytes_per_sample
-            if len(payload) < usable:
+            if len(payload) % bytes_per_sample:
                 raise RuntimeError(
-                    f"scope returned {len(payload)} bytes for {count} points "
-                    f"({usable} expected); waveform not ready: {payload[:40]!r}"
+                    f"scope returned {len(payload)} bytes, not a whole number "
+                    f"of {bytes_per_sample}-byte samples"
                 )
-            chunks.append(np.frombuffer(payload[:usable], dtype=dtype))
-            start += count
+            returned = len(payload) // bytes_per_sample
+            if returned == 0:
+                if start == 0:
+                    raise RuntimeError(
+                        f"scope returned no waveform data for {channel}: "
+                        f"{payload[:40]!r}; waveform not ready"
+                    )
+                break
+            chunks.append(np.frombuffer(payload, dtype=dtype))
+            start += returned
+            if returned < count:
+                # Fewer points than requested means we have hit the end of the
+                # available record (typically screen vs. memory depth); stop
+                # rather than asking for offsets the instrument will reject.
+                break
 
-        codes = np.concatenate(chunks)[:total] if chunks else np.empty(0, dtype)
-        return codes, desc
+        if not chunks:
+            return np.empty(0, dtype), desc
+        return np.concatenate(chunks)[:total], desc
 
     def _acquisition_count(self) -> int:
         return int(float(self._query(":ACQuire:NUMACq?")))
