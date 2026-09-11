@@ -14,6 +14,7 @@ from cetal_scopes.scopes.siglent import (
     _make_transport,
     _port_from_address,
     _SocketTransport,
+    _strip_binary_header,
     _VisaTransport,
     codes_to_volts,
     parse_wavedesc,
@@ -63,6 +64,7 @@ class FakeTransport:
         max_points: str = "1000",
         status: str = "Stop",
         advance_on_run: bool = True,
+        advance_on_query: bool = False,
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
@@ -70,6 +72,7 @@ class FakeTransport:
         self.max_points = max_points
         self.status = status
         self.advance_on_run = advance_on_run
+        self.advance_on_query = advance_on_query
         self.num_acq = 0
         self.opened = False
         self.closed = False
@@ -94,6 +97,8 @@ class FakeTransport:
         if command == ":WAVeform:MAXPoint?":
             return self.max_points
         if command == ":ACQuire:NUMACq?":
+            if self.advance_on_query:
+                self.num_acq += 1
             return str(self.num_acq)
         if command == ":TRIGger:STATus?":
             return self.status
@@ -115,6 +120,7 @@ def make_driver(
     data_arrays: list[np.ndarray] | None = None,
     max_points: str = "1000",
     sample_width: str = "WORD",
+    streaming: bool = False,
 ) -> tuple[SiglentSDS6204L, FakeTransport]:
     descriptor = descriptor or make_descriptor()
     data_arrays = data_arrays or [
@@ -123,7 +129,12 @@ def make_driver(
     ]
     fake = FakeTransport(descriptor, data_arrays, max_points=max_points)
     return (
-        SiglentSDS6204L(channels=channels, sample_width=sample_width, transport=fake),
+        SiglentSDS6204L(
+            channels=channels,
+            sample_width=sample_width,
+            streaming=streaming,
+            transport=fake,
+        ),
         fake,
     )
 
@@ -141,9 +152,20 @@ def test_descriptor_parsing() -> None:
     assert desc.voffset_scaled == pytest.approx(0.1)
 
 
-def test_descriptor_parsing_strips_binary_header() -> None:
-    payload = make_descriptor(frame_points=7)
-    desc = parse_wavedesc(b"#9000000346" + payload)
+def test_strip_binary_header() -> None:
+    assert _strip_binary_header(b"#9000000346payload") == b"payload"
+    assert _strip_binary_header(b"12345") == b"12345"
+    with pytest.raises(ValueError, match="malformed"):
+        _strip_binary_header(b"#<oops")
+
+
+def test_parse_wavedesc_tolerates_hash_in_payload() -> None:
+    # The 346-byte payload may itself contain a '#' byte (e.g. inside the vdiv
+    # float); it must not be mistaken for an IEEE 488.2 header.
+    payload = bytearray(make_descriptor(frame_points=7))
+    payload[0x00] = ord("#")
+    payload[0x01] = ord("<")
+    desc = parse_wavedesc(bytes(payload))
     assert desc.frame_points == 7
 
 
@@ -373,11 +395,36 @@ def test_set_channel_probe() -> None:
     assert ":CHANnel1:PROBe VALue,10" in fake.written
 
 
+def test_set_channel_impedance_aliases() -> None:
+    scope, fake = make_driver()
+    scope.connect()
+    scope.set_channel("C1", impedance="50")
+    scope.set_channel("C2", impedance="1M")
+    assert ":CHANnel1:IMPedance FIFTy" in fake.written
+    assert ":CHANnel2:IMPedance ONEMeg" in fake.written
+
+
+def test_set_channel_rejects_unknown_impedance() -> None:
+    scope, _ = make_driver()
+    scope.connect()
+    with pytest.raises(ValueError, match="unsupported impedance"):
+        scope.set_channel("C1", impedance="75")
+
+
+def test_configure_vertical_impedance() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.configure({"vertical": {"C1": {"impedance": "1M", "scale": 0.1}}})
+    assert ":CHANnel1:IMPedance ONEMeg" in fake.written
+    assert ":CHANnel1:SCALe 0.1" in fake.written
+
+
 def test_wave_desc_is_frozen() -> None:
     desc: Any = parse_wavedesc(make_descriptor())
     assert isinstance(desc, WaveDesc)
+    writable: Any = desc
     with pytest.raises(FrozenInstanceError):
-        desc.vdiv = 1.0
+        writable.vdiv = 1.0
 
 
 def test_timebase_index_out_of_range_falls_back() -> None:
@@ -410,6 +457,51 @@ def test_acquire_honors_trigger_mode() -> None:
     scope.acquire()
     assert ":TRIGger:MODE AUTO" in fake.written
     assert ":TRIGger:STOP" in fake.written
+
+
+def test_streaming_starts_scope_once_and_keeps_it_running() -> None:
+    data = [
+        np.array([1, 2, 3], dtype=np.int16),
+        np.array([4, 5, 6], dtype=np.int16),
+    ]
+    fake = FakeTransport(make_descriptor(), data, status="Auto", advance_on_query=True)
+    scope = SiglentSDS6204L(
+        channels=("C1",),
+        transport=fake,
+        streaming=True,
+        trigger_mode="AUTO",
+    )
+    scope.connect()
+
+    first = scope.acquire()
+    second = scope.acquire()
+
+    assert fake.written.count(":TRIGger:RUN") == 1
+    assert fake.written.count(":TRIGger:STOP") == 1
+    assert ":TRIGger:MODE AUTO" in fake.written
+    assert first.volts.shape == (1, 3)
+    assert second.volts.shape == (1, 3)
+
+
+def test_ensure_running_rearms_a_stopped_scope() -> None:
+    fake = FakeTransport(make_descriptor(), [], status="Stop")
+    scope = SiglentSDS6204L(
+        channels=("C1",), transport=fake, streaming=True, trigger_mode="AUTO"
+    )
+    scope.connect()
+
+    scope._ensure_running()
+    scope._ensure_running()
+
+    assert fake.written.count(":TRIGger:RUN") == 2
+    assert fake.written.count(":TRIGger:STOP") == 1
+
+
+def test_streaming_property() -> None:
+    streaming, _ = make_driver(streaming=True)
+    assert streaming.streaming is True
+    one_shot, _ = make_driver()
+    assert one_shot.streaming is False
 
 
 def test_configure_rejects_non_mapping_trigger() -> None:

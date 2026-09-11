@@ -31,6 +31,8 @@ nav:
       - Instrument drivers: api/drivers.md
       - Analysis: api/analysis.md
       - Plotting: api/plotting.md
+  - Apps:
+      - Real-time viewer: apps/realtime-viewer.md
 
 plugins:
   - search

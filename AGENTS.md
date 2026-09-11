@@ -9,10 +9,12 @@ SDS6204L driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket
 LAN interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
 against an SDS6204L over LAN (single-channel capture). A downstream
 `cetal_scopes.analysis` subpackage (time / spectral / analytic / metrics plus
-result classes) and `cetal_scopes.plotting` are implemented. The metadata,
-antenna and I/O pieces described in `docs/architecture.md` are **not implemented
-yet**. Treat docs and docstrings as design intent, not current behavior — verify
-against source before relying on them.
+result classes) and `cetal_scopes.plotting` are implemented. Downstream
+applications live in `apps/` (currently a real-time signal/FFT viewer); they are
+not part of the library. The metadata, antenna and I/O pieces described in
+`docs/architecture.md` are **not implemented yet**. Treat docs and docstrings as
+design intent, not current behavior — verify against source before relying on
+them.
 
 ## Architecture
 
@@ -56,21 +58,28 @@ Read `docs/architecture.md` before changing the data model. In short:
 
 Setup first: `uv sync --all-groups` (direnv runs this automatically in the shell).
 
-- Lint: `uv run ruff check src tests`
-- Format: `uv run ruff format src tests` (CI enforces `--check`)
-- Typecheck: `uv run pyright src`
+- Lint: `uv run ruff check src tests apps`
+- Format: `uv run ruff format src tests apps` (CI enforces `--check`)
+- Typecheck: `uv run pyright src apps`
 - Test: `uv run pytest`
   - Single test: `uv run pytest tests/test_capture.py::test_default_channel_names_and_shape`
+  - App test: `uv run pytest apps/realtime_viewer/tests`
 - Docs preview: `uv run mkdocs serve` (build: `uv run mkdocs build`, output `site/`)
 
-There is no ruff/pyright config; defaults apply (ruff line length 88, double
-quotes). CI (`.github/workflows/ci.yml`) runs lint -> typecheck -> test on push
-to `main` only.
+Ruff defaults apply (line length 88, double quotes); `[tool.pyright]` adds
+`apps/realtime_viewer` to `extraPaths` so the app modules resolve. CI
+(`.github/workflows/ci.yml`) runs lint -> typecheck -> test on push to `main`
+only.
 
 ## Conventions
 
 - New code goes in `src/cetal_scopes/`. The package ships `py.typed`; keep all
-  code type-annotated, as `pyright src` is required to pass.
+  code type-annotated, as `pyright src apps` is required to pass.
+- Downstream applications live in `apps/`, one directory per app with its own
+  entry module, README and `tests/`. They are **not** packaged and must not be
+  imported by the library; promote anything reusable into
+  `src/cetal_scopes/`. Apps are linted and type-checked but excluded from
+  coverage. See `apps/README.md`.
 - Coverage is on by default via pytest `addopts` (`--cov=cetal_scopes
   --cov-report=term-missing`).
 - Docstrings use the NumPy style; mkdocstrings is configured for it.

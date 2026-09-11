@@ -86,7 +86,7 @@ src/cetal_scopes/
 
 Tests: `tests/test_capture.py`, `test_channel.py`, `test_scope_base.py`,
 `test_siglent.py`, `test_analysis_{time,spectral,analytic,metrics}.py`,
-`test_plotting.py`. 115 passing, ~94% coverage.
+`test_plotting.py`. 139 passing, ~94% coverage.
 
 ### Analysis API cheat-sheet
 ```python
@@ -146,6 +146,35 @@ fadd1a2 Add Scope ABC driver template
 - After a run/glitch, `acquire()` may need `:TRIGger:STOP` before `RUN` to
   re-arm (the driver now does this).
 
+### Streaming vs one-shot acquisition (`streaming=True`)
+- `acquire()` defaults to one-shot: `STOP` -> `MODE` -> `RUN` -> wait -> `STOP`,
+  then fetch. The stop/run toggle every frame makes the front panel flicker
+  between `Auto` and `Stop`.
+- `streaming=True` starts the scope once and leaves it running; later calls
+  wait for the next `:ACQuire:NUMACq?` and fetch without stopping.
+  `:TRIGger:STATus?` re-arms a scope that was stopped externally.
+- **Gotcha:** `:TRIGger:RUN` **resets** `:ACQuire:NUMACq?` to `0` (`STOP` does
+  not). Read the counter *after* arming, or the wait targets a stale, larger
+  value and times out once the scope was already running.
+- Bench A/B (C1, 100 k samples = 200 000 `DATA` bytes, `AUTO`, 1 µs/div,
+  10 GS/s), medians of 6, interleaved:
+  - one-shot: total **257 ms** = wait 47 ms + fetch 179 ms
+  - streaming: total **316 ms** = wait 2 ms + **fetch 307 ms**
+  Both modes transfer identical bytes, so the fetch really is ~1.6x slower
+  while the scope is acquiring/displaying (acquisition + display contend with
+  the SCPI readout). Streaming removes the `Auto`/`Stop` stutter and the ~50 ms
+  poll wait, but is ~20% slower per frame. The viewer defaults to one-shot
+  (faster, one coherent frame); `--stream` keeps the scope live.
+
+### Vertical scale (V/div) range
+- Measured on this unit: a **1-2-5 ladder** from **0.5 mV/div** to
+  **10 V/div** at 1 MΩ; the 50 Ω path tops out at **1 V/div**. Out-of-range
+  values clamp silently (below 0.5 mV -> 0.5 mV, above the max -> max).
+- Standard default: **1 V/div**. For small signals use the most sensitive
+  setting that keeps peaks within ~±4 divisions: it both avoids clipping and
+  shrinks the fixed-code ADC comb relative to the signal (the comb scales with
+  V/div).
+
 ### ADC comb ("the comb") — root-caused
 - The SDS6204L is an **8-bit instrument**; its 16-bit `WORD` (HD transfer) path
   adds a deterministic pattern with a **256-sample period**, so the spurs sit at
@@ -183,6 +212,12 @@ fadd1a2 Add Scope ABC driver template
 - The reader now: finds `#` anywhere, skips leading blank lines, returns raw
   bytes on the ASCII fallback (no `encode("ascii")` crash), and `_fetch_codes`
   **raises** on a short/empty payload.
+- `:WAVeform:PREamble?` is a definite-length block whose **346-byte payload can
+  itself contain a `#` byte** (e.g. inside the `vdiv` float). `_read_block`
+  already removes the `#N<len>` header, so `parse_wavedesc` must **not** strip
+  again — doing so mis-parsed the payload and crashed with
+  `int('<')` (seen at `--vdiv 0.01`). Header stripping now lives only in the
+  transports; a regression test keeps a `#`/`<` byte pair in the payload.
 
 ### `MDEPth` / `MMANagement` trap
 - If `:ACQuire:MMANagement` is `FMDepth` with `:ACQuire:MDEPth 2.5M`, the

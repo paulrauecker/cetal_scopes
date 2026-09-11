@@ -35,4 +35,8 @@ dev = [
 
 [tool.pytest.ini_options]
 addopts = "-ra --cov=cetal_scopes --cov-report=term-missing"
-testpaths = ["tests"]
+testpaths = ["tests", "apps"]
+pythonpath = ["apps/realtime_viewer"]
+
+[tool.pyright]
+extraPaths = ["apps/realtime_viewer"]

@@ -11,8 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --all-groups
-      - run: uv run ruff check src tests
-      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests apps
+      - run: uv run ruff format --check src tests apps
 
   typecheck:
     runs-on: ubuntu-latest
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --all-groups
-      - run: uv run pyright src
+      - run: uv run pyright src apps
 
   test:
     runs-on: ubuntu-latest

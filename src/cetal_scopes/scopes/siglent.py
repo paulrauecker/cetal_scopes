@@ -154,10 +154,12 @@ def _strip_binary_header(data: bytes) -> bytes:
     start = data.find(b"#")
     if start == -1:
         return data
-    if start + 2 > len(data):
-        raise ValueError("truncated IEEE 488.2 binary header")
-    digit_count = int(chr(data[start + 1]))
-    payload_start = start + 2 + digit_count
+    header = data[start + 1 : start + 2]
+    if not header.isdigit():
+        raise ValueError(f"malformed IEEE 488.2 header in {data[:48]!r}")
+    payload_start = start + 2 + int(header)
+    if payload_start > len(data):
+        raise ValueError(f"truncated IEEE 488.2 header in {data[:48]!r}")
     return data[payload_start:]
 
 
@@ -167,7 +169,9 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
     Parameters
     ----------
     raw : bytes
-        The preamble payload, with or without its IEEE 488.2 binary header.
+        The preamble payload. The transport has already removed any IEEE 488.2
+        binary header, so the 346-byte descriptor starts at the first byte; do
+        not strip again (the payload may itself contain a ``#`` byte).
 
     Returns
     -------
@@ -179,7 +183,7 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
     ValueError
         If the payload is too short to contain the descriptor.
     """
-    descriptor = _strip_binary_header(raw)
+    descriptor = raw
     if len(descriptor) < _WAVEDESC_LENGTH:
         raise ValueError(
             f"WAVEDESC payload must be at least {_WAVEDESC_LENGTH} bytes, "
@@ -268,6 +272,29 @@ def _normalize_sample_width(width: str) -> str:
             f"{_VALID_SAMPLE_WIDTHS}"
         )
     return name
+
+
+_IMPEDANCE_ALIASES = {
+    "onemeg": "ONEMeg",
+    "1m": "ONEMeg",
+    "1meg": "ONEMeg",
+    "1mohm": "ONEMeg",
+    "1megohm": "ONEMeg",
+    "1e6": "ONEMeg",
+    "fifty": "FIFTy",
+    "50": "FIFTy",
+    "50ohm": "FIFTy",
+    "50r": "FIFTy",
+}
+
+
+def _normalize_impedance(value: str) -> str:
+    key = value.strip().lower().replace(" ", "").replace("Ω", "ohm")
+    if key in _IMPEDANCE_ALIASES:
+        return _IMPEDANCE_ALIASES[key]
+    raise ValueError(
+        f"unsupported impedance {value!r}; expected 'ONEMeg'/'1M' or 'FIFTy'/'50'"
+    )
 
 
 class _Transport(Protocol):
@@ -474,6 +501,13 @@ class SiglentSDS6204L(Scope):
         1 V/div) that discards small signals. Note the 16-bit path also carries
         a deterministic ``k * fs / 256`` comb; see
         :func:`cetal_scopes.analysis.remove_adc_comb`.
+    streaming : bool, optional
+        Keep the scope running between acquisitions instead of stopping it for
+        every fetch. Defaults to ``False`` (one coherent snapshot per call).
+        Enable it for a live view: the scope is started on the first
+        :meth:`acquire` and left running, so the front panel does not stutter
+        between ``Auto`` and ``Stop``. Intended for a free-running
+        :attr:`trigger_mode` such as ``"AUTO"``.
     port : int, optional
         Raw-socket SCPI port. Defaults to ``5025``.
     timeout : float, optional
@@ -496,6 +530,7 @@ class SiglentSDS6204L(Scope):
         *,
         channels: Sequence[str] = ("C1",),
         sample_width: str = "WORD",
+        streaming: bool = False,
         port: int = DEFAULT_PORT,
         timeout: float = 5.0,
         acquire_timeout: float = 10.0,
@@ -511,6 +546,8 @@ class SiglentSDS6204L(Scope):
         self._grid_num = grid_num
         self._channels = _normalize_channels(channels)
         self._sample_width = _normalize_sample_width(sample_width)
+        self._streaming = streaming
+        self._running = False
         self._transport = transport
         self._owns_transport = transport is None
         self._connected = False
@@ -540,6 +577,11 @@ class SiglentSDS6204L(Scope):
         """Waveform transfer width (``"BYTE"`` or ``"WORD"``)."""
         return self._sample_width
 
+    @property
+    def streaming(self) -> bool:
+        """Whether :meth:`acquire` leaves the scope running between fetches."""
+        return self._streaming
+
     def connect(self) -> None:
         """Open the socket and identify the instrument."""
         if self._connected:
@@ -561,6 +603,7 @@ class SiglentSDS6204L(Scope):
             if self._owns_transport:
                 self._transport = None
         self._connected = False
+        self._running = False
 
     def configure(self, settings: Mapping[str, Any]) -> None:
         """Apply acquisition settings.
@@ -569,7 +612,7 @@ class SiglentSDS6204L(Scope):
         ``acquire_type``, ``memory_depth``, ``trigger`` (mapping with
         ``source``/``level``/``slope``) and ``vertical`` (mapping of channel
         name to ``scale``/``offset``/``coupling``/``probe``/
-        ``bandwidth_limit``).
+        ``bandwidth_limit``/``impedance``).
         """
         unknown = set(settings) - _CONFIG_KEYS
         if unknown:
@@ -615,6 +658,7 @@ class SiglentSDS6204L(Scope):
                     coupling=params.get("coupling"),
                     probe=params.get("probe"),
                     bandwidth_limit=params.get("bandwidth_limit"),
+                    impedance=params.get("impedance"),
                 )
 
     def set_channel(
@@ -626,6 +670,7 @@ class SiglentSDS6204L(Scope):
         coupling: str | None = None,
         probe: float | None = None,
         bandwidth_limit: str | None = None,
+        impedance: str | None = None,
     ) -> None:
         """Configure one analog channel."""
         index = _normalize_channel(channel)[1:]
@@ -639,6 +684,8 @@ class SiglentSDS6204L(Scope):
             self._write(f":CHANnel{index}:PROBe VALue,{float(probe):.6g}")
         if bandwidth_limit is not None:
             self._write(f":CHANnel{index}:BWLimit {bandwidth_limit}")
+        if impedance is not None:
+            self._write(f":CHANnel{index}:IMPedance {_normalize_impedance(impedance)}")
 
     def set_timebase(
         self, *, scale: float | None = None, delay: float | None = None
@@ -677,8 +724,15 @@ class SiglentSDS6204L(Scope):
         """Arm an acquisition, wait for it, and fetch the channels.
 
         The sweep mode comes from :attr:`trigger_mode` (default ``"SINGle"``).
-        Completion is detected via the ``:ACQuire:NUMACq?`` counter, then the
-        scope is stopped so the fetched buffer is a coherent snapshot.
+        Completion is detected via the ``:ACQuire:NUMACq?`` counter.
+
+        In the default one-shot mode the scope is stopped before and after each
+        acquisition so the fetched buffer is a coherent snapshot. With
+        :attr:`streaming` enabled the scope is started on the first call and
+        left running, so later calls only wait for the next acquisition and
+        fetch it without stopping the scope. Streaming needs a free-running
+        sweep mode (e.g. ``AUTO``); in ``SINGle`` the counter stops advancing
+        between triggers.
 
         Returns
         -------
@@ -687,12 +741,17 @@ class SiglentSDS6204L(Scope):
             sharing the first channel's timebase.
         """
         self._require_connected()
-        self._write(":TRIGger:STOP")
-        self._write(f":TRIGger:MODE {self._trigger_mode}")
-        before = self._acquisition_count()
-        self._write(":TRIGger:RUN")
-        self._wait_for_acquisition(before)
-        self._write(":TRIGger:STOP")
+        if self._streaming:
+            self._ensure_running()
+            before = self._acquisition_count()
+            self._wait_for_acquisition(before)
+        else:
+            self._write(":TRIGger:STOP")
+            self._write(f":TRIGger:MODE {self._trigger_mode}")
+            before = self._acquisition_count()
+            self._write(":TRIGger:RUN")
+            self._wait_for_acquisition(before)
+            self._write(":TRIGger:STOP")
 
         volts_rows: list[NDArray[np.float64]] = []
         raw_rows: list[NDArray[Any]] = []
@@ -784,6 +843,23 @@ class SiglentSDS6204L(Scope):
 
     def _acquisition_count(self) -> int:
         return int(float(self._query(":ACQuire:NUMACq?")))
+
+    def _ensure_running(self) -> None:
+        """Start free-running acquisition, re-arming a stopped scope.
+
+        The first call stops the scope, sets the sweep mode and runs it; later
+        calls leave a running scope alone and only re-arm it if it was stopped
+        externally. Re-arming issues ``RUN`` without a preceding ``STOP`` so the
+        sweep mode is preserved.
+        """
+        if not self._running:
+            self._write(":TRIGger:STOP")
+            self._write(f":TRIGger:MODE {self._trigger_mode}")
+            self._write(":TRIGger:RUN")
+            self._running = True
+            return
+        if self._query(":TRIGger:STATus?").strip().lower() == "stop":
+            self._write(":TRIGger:RUN")
 
     def _wait_for_acquisition(self, before: int) -> None:
         deadline = time.monotonic() + self._acquire_timeout
