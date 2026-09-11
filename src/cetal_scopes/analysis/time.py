@@ -8,7 +8,7 @@ from scipy.signal import detrend as _scipy_detrend
 from cetal_scopes.analysis._util import DetrendMode, with_volts
 from cetal_scopes.channel import Channel
 
-__all__ = ["detrend", "gate", "resample", "subtract_baseline"]
+__all__ = ["detrend", "gate", "remove_adc_comb", "resample", "subtract_baseline"]
 
 
 def gate(
@@ -89,6 +89,43 @@ def subtract_baseline(
     else:
         raise ValueError(f"mode must be 'mean' or 'median', got {mode!r}")
     return with_volts(channel, channel.volts - level)
+
+
+def remove_adc_comb(channel: Channel, *, period: int = 256) -> Channel:
+    """Remove a periodic ADC interleave comb from the channel.
+
+    The SDS6204L's 16-bit acquisition path adds a deterministic pattern with a
+    period of ``256`` samples, producing spurs at every multiple of
+    ``fs / 256`` (about 39.06 MHz at 10 GS/s), with ``fs / 8``, ``fs / 4`` and
+    ``fs / 2`` among the strongest. Subtracting the mean of each phase
+    (``index % period``) removes exactly that pattern and is gentler than
+    notching the spectrum: the overall DC level is preserved, so only the comb
+    is removed.
+
+    Parameters
+    ----------
+    channel : Channel
+        Source channel.
+    period : int
+        Pattern period in samples. Defaults to ``256``. The pattern is locked to
+        the instrument's internal ADC clock, so at decimated sample rates the
+        period in the recorded stream scales with ``fs`` (e.g. 512 at 5 GS/s).
+
+    Returns
+    -------
+    Channel
+        Comb-corrected channel (raw codes dropped).
+    """
+    if period < 2:
+        raise ValueError("period must be at least 2")
+    volts = channel.volts.astype(np.float64)
+    if volts.size < period:
+        raise ValueError("channel is shorter than one comb period")
+    phase = np.arange(volts.size) % period
+    phase_means = np.array(
+        [volts[phase == p].mean() for p in range(period)], dtype=np.float64
+    )
+    return with_volts(channel, volts - phase_means[phase] + volts.mean())
 
 
 def detrend(channel: Channel, *, type: DetrendMode = "linear") -> Channel:

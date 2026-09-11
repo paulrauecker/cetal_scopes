@@ -114,14 +114,18 @@ def make_driver(
     descriptor: bytes | None = None,
     data_arrays: list[np.ndarray] | None = None,
     max_points: str = "1000",
+    sample_width: str = "WORD",
 ) -> tuple[SiglentSDS6204L, FakeTransport]:
     descriptor = descriptor or make_descriptor()
     data_arrays = data_arrays or [
-        np.array([0, 25, -25], dtype=np.int8),
-        np.array([10, -10, 0], dtype=np.int8),
+        np.array([0, 25, -25], dtype=np.int16),
+        np.array([10, -10, 0], dtype=np.int16),
     ]
     fake = FakeTransport(descriptor, data_arrays, max_points=max_points)
-    return SiglentSDS6204L(channels=channels, transport=fake), fake
+    return (
+        SiglentSDS6204L(channels=channels, sample_width=sample_width, transport=fake),
+        fake,
+    )
 
 
 def test_descriptor_parsing() -> None:
@@ -214,7 +218,7 @@ def test_acquire_returns_capture() -> None:
 
 def test_acquire_chunks_large_waveforms() -> None:
     descriptor = make_descriptor(frame_points=3)
-    data = [np.array([1, 2], dtype=np.int8), np.array([3], dtype=np.int8)]
+    data = [np.array([1, 2], dtype=np.int16), np.array([3], dtype=np.int16)]
     scope, fake = make_driver(
         ("C1",), descriptor=descriptor, data_arrays=data, max_points="2"
     )
@@ -228,15 +232,46 @@ def test_acquire_chunks_large_waveforms() -> None:
     assert ":WAVeform:POINt 1" in fake.written
 
 
-def test_acquire_uses_word_width_for_hd_adc() -> None:
+def test_acquire_uses_word_width_by_default() -> None:
     descriptor = make_descriptor(adc_bit=12)
     data = [np.array([1, 2, 3], dtype=np.int16)]
     scope, fake = make_driver(("C1",), descriptor=descriptor, data_arrays=data)
     scope.connect()
+    assert scope.sample_width == "WORD"
     scope.acquire()
 
     assert ":WAVeform:WIDTh WORD" in fake.written
     assert ":WAVeform:BYTeorder LSB" in fake.written
+
+
+def test_acquire_uses_byte_width_when_requested() -> None:
+    descriptor = make_descriptor(adc_bit=12)
+    data = [np.array([1, 2, 3], dtype=np.int8)]
+    scope, fake = make_driver(
+        ("C1",), descriptor=descriptor, data_arrays=data, sample_width="BYTE"
+    )
+    scope.connect()
+    scope.acquire()
+
+    assert ":WAVeform:WIDTh BYTE" in fake.written
+    assert ":WAVeform:BYTeorder LSB" not in fake.written
+
+
+def test_byte_transfer_left_aligns_hd_codes() -> None:
+    descriptor = make_descriptor(adc_bit=12, vdiv=1.0, voffset=0.0, code_per_div=2560.0)
+    data = [np.array([1, -1], dtype=np.int8)]
+    scope, _ = make_driver(
+        ("C1",), descriptor=descriptor, data_arrays=data, sample_width="BYTE"
+    )
+    scope.connect()
+    capture = scope.acquire()
+
+    np.testing.assert_allclose(capture.volts, [[0.1, -0.1]])
+
+
+def test_invalid_sample_width_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported sample width"):
+        SiglentSDS6204L(sample_width="HALF")
 
 
 def test_acquire_rejects_short_waveform_block() -> None:
@@ -249,7 +284,7 @@ def test_acquire_rejects_short_waveform_block() -> None:
 
 def test_acquire_clamps_to_returned_screen_points() -> None:
     descriptor = make_descriptor(frame_points=100)
-    data = [np.array([1, 2, 3, 4], dtype=np.int8)]
+    data = [np.array([1, 2, 3, 4], dtype=np.int16)]
     scope, _ = make_driver(
         ("C1",), descriptor=descriptor, data_arrays=data, max_points="1000"
     )
@@ -263,7 +298,7 @@ def test_acquire_clamps_to_returned_screen_points() -> None:
 
 def test_acquire_stops_when_a_chunk_is_short() -> None:
     descriptor = make_descriptor(frame_points=10)
-    data = [np.array([1, 2], dtype=np.int8), np.array([3], dtype=np.int8)]
+    data = [np.array([1, 2], dtype=np.int16), np.array([3], dtype=np.int16)]
     scope, fake = make_driver(
         ("C1",), descriptor=descriptor, data_arrays=data, max_points="2"
     )
@@ -277,7 +312,9 @@ def test_acquire_stops_when_a_chunk_is_short() -> None:
 def test_acquire_rejects_partial_sample() -> None:
     descriptor = make_descriptor(frame_points=3, adc_bit=12)
     data = [np.array([1, 2, 3], dtype=np.uint8)]
-    scope, _ = make_driver(("C1",), descriptor=descriptor, data_arrays=data)
+    scope, _ = make_driver(
+        ("C1",), descriptor=descriptor, data_arrays=data, sample_width="WORD"
+    )
     scope.connect()
     with pytest.raises(RuntimeError, match="not a whole number"):
         scope.acquire()

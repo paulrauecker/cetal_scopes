@@ -28,6 +28,7 @@ from cetal_scopes.analysis.spectral import (
 from cetal_scopes.analysis.time import (
     detrend,
     gate,
+    remove_adc_comb,
     resample,
     subtract_baseline,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "gate",
     "instantaneous_frequency",
     "instantaneous_phase",
+    "remove_adc_comb",
     "resample",
     "stats",
     "subtract_baseline",

@@ -38,9 +38,12 @@ Read `docs/architecture.md` before changing the data model. In short:
   once, `:SYSTem:SELFCal?` reports `DONE` even mid-run (observed at 78%), and
   `STATus:OPERation` stays 0. Wait for the front panel to finish. While it
   runs, waveform queries time out and `:ACQuire:NUMACq?` may stop advancing.
-  Also expect deterministic ADC interleave spurs at `fs/8`, `fs/4`, `fs/2` on
-  every channel (including open ones); analyze a band/tone rather than the
-  global FFT peak.
+  Also expect the deterministic ADC comb from the 16-bit transfer path: a
+  256-sample pattern giving spurs at every `k*fs/256` (`fs/8`, `fs/4`, `fs/2` are
+  the strongest) on every channel including open ones. The driver defaults to
+  `sample_width="WORD"`; `BYTE` is a lossy top-byte truncation and still carries
+  the comb. Use `analysis.remove_adc_comb()` for broadband work or analyze a
+  band/tone rather than the global FFT peak.
 
 ## Toolchain
 

@@ -213,17 +213,22 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
     )
 
 
-def codes_to_volts(codes: NDArray[Any], desc: WaveDesc) -> NDArray[np.float64]:
+def codes_to_volts(
+    codes: NDArray[Any], desc: WaveDesc, *, shift: int = 0
+) -> NDArray[np.float64]:
     """Convert signed ADC codes to volts using the preamble scaling.
 
-    Implements ``V = code * (vdiv * probe / code_per_div) - voffset * probe``.
+    Implements ``V = code * 2**shift * (vdiv * probe / code_per_div)
+    - voffset * probe``. ``shift`` left-aligns narrow transfers: when an
+    ``adc_bit > 8`` scope is read in ``BYTE`` width, ``code_per_div`` still
+    describes the full word, so the high byte must be scaled by ``2**8``.
     """
     if desc.code_per_div == 0:
         raise ValueError("code_per_div is zero; waveform cannot be scaled")
-    return (
-        codes.astype(np.float64) * (desc.vdiv_scaled / desc.code_per_div)
-        - desc.voffset_scaled
-    )
+    values = codes.astype(np.float64)
+    if shift:
+        values = values * float(1 << shift)
+    return values * (desc.vdiv_scaled / desc.code_per_div) - desc.voffset_scaled
 
 
 def time_origin(desc: WaveDesc, grid_num: int = GRID_NUM) -> float:
@@ -250,6 +255,19 @@ def _normalize_channels(channels: Sequence[str]) -> tuple[str, ...]:
     if len(set(names)) != len(names):
         raise ValueError(f"channels must be unique, got {names!r}")
     return names
+
+
+_VALID_SAMPLE_WIDTHS = ("BYTE", "WORD")
+
+
+def _normalize_sample_width(width: str) -> str:
+    name = width.strip().upper()
+    if name not in _VALID_SAMPLE_WIDTHS:
+        raise ValueError(
+            f"unsupported sample width {width!r}; expected one of "
+            f"{_VALID_SAMPLE_WIDTHS}"
+        )
+    return name
 
 
 class _Transport(Protocol):
@@ -449,6 +467,13 @@ class SiglentSDS6204L(Scope):
     channels : sequence of str, optional
         Analog channels to acquire, e.g. ``("C1", "C2")``. ``"CH1"`` and
         ``"C1"`` are equivalent. Defaults to ``("C1",)``.
+    sample_width : str, optional
+        Waveform transfer width, ``"BYTE"`` or ``"WORD"``. Defaults to
+        ``"WORD"``: the 16-bit path carries the full acquired waveform, whereas
+        ``"BYTE"`` is a coarse truncation (the top byte, ~94 mV per step at
+        1 V/div) that discards small signals. Note the 16-bit path also carries
+        a deterministic ``k * fs / 256`` comb; see
+        :func:`cetal_scopes.analysis.remove_adc_comb`.
     port : int, optional
         Raw-socket SCPI port. Defaults to ``5025``.
     timeout : float, optional
@@ -470,6 +495,7 @@ class SiglentSDS6204L(Scope):
         address: str = DEFAULT_ADDRESS,
         *,
         channels: Sequence[str] = ("C1",),
+        sample_width: str = "WORD",
         port: int = DEFAULT_PORT,
         timeout: float = 5.0,
         acquire_timeout: float = 10.0,
@@ -484,6 +510,7 @@ class SiglentSDS6204L(Scope):
         self._trigger_mode = trigger_mode
         self._grid_num = grid_num
         self._channels = _normalize_channels(channels)
+        self._sample_width = _normalize_sample_width(sample_width)
         self._transport = transport
         self._owns_transport = transport is None
         self._connected = False
@@ -507,6 +534,11 @@ class SiglentSDS6204L(Scope):
     def channels(self) -> tuple[str, ...]:
         """Analog channels fetched by :meth:`acquire`."""
         return self._channels
+
+    @property
+    def sample_width(self) -> str:
+        """Waveform transfer width (``"BYTE"`` or ``"WORD"``)."""
+        return self._sample_width
 
     def connect(self) -> None:
         """Open the socket and identify the instrument."""
@@ -670,7 +702,8 @@ class SiglentSDS6204L(Scope):
 
         for channel in self._channels:
             codes, desc = self._fetch_codes(channel)
-            volts_rows.append(codes_to_volts(codes, desc))
+            shift = 8 if self._sample_width == "BYTE" and desc.adc_bit > 8 else 0
+            volts_rows.append(codes_to_volts(codes, desc, shift=shift))
             raw_rows.append(codes)
             names.append(channel)
             if t0 is None:
@@ -710,7 +743,7 @@ class SiglentSDS6204L(Scope):
         if max_points <= 0:
             max_points = total
 
-        word = desc.adc_bit > 8
+        word = self._sample_width == "WORD"
         self._write(f":WAVeform:WIDTh {'WORD' if word else 'BYTE'}")
         if word:
             self._write(":WAVeform:BYTeorder LSB")

@@ -45,9 +45,23 @@ is not ready — `_fetch_codes` raises rather than returning garbage.
     the scope is warm.
   - After a run, `acquire()` may need a `:TRIGger:STOP` before `RUN` will
     re-arm the acquisition engine.
-- **ADC interleave spurs.** Expect deterministic spurs at `fs/8`, `fs/4` and
-  `fs/2` (e.g. 1.25 / 2.5 / 5 GHz at 10 GS/s) on every channel including open
-  ones, plus a coupled ambient comb. Analyze a band or use coherent detection
-  (`cetal_scopes.analysis.tone_amplitude`) rather than the global FFT peak.
+- **ADC comb (16-bit path).** The SDS6204L is an 8-bit instrument whose `WORD`
+  (16-bit HD) transfer path adds a deterministic pattern with a **256-sample
+  period**: spurs at every multiple of `fs / 256` (~39.06 MHz at 10 GS/s), of
+  which `fs/8`, `fs/4` and `fs/2` are the strongest. It appears on every channel
+  including open ones, is generated after the analog front end (a 20 MHz
+  bandwidth limit does not remove it; `:ACQuire:RESolution` is locked at
+  `16Bits`), and persists at reduced sample rates.
+  - The comb is a fixed ~10–12 ADC codes, so its size in volts scales with
+    `V/div` while the signal does not. Fill the ADC range with the signal
+    (coarsest useful `V/div` avoided), or use
+    `cetal_scopes.analysis.remove_adc_comb` to subtract the 256-phase pattern.
+  - `:WAVeform:WIDTh BYTE` is **not** an escape: it returns the top byte of the
+    same 16-bit word (a coarse staircase, ~94 mV per step at 1 V/div) and still
+    carries the comb. The driver defaults to `WORD` (`sample_width="BYTE"` is
+    available for compatibility).
+  - For narrowband work, coherent detection
+    (`cetal_scopes.analysis.tone_amplitude`) ignores the comb; a band amplitude
+    (`band_amplitude`) is the fallback when the tone frequency is unknown.
 - `*ESR?` bit 4 (value 16) can be latched by earlier command errors; read it to
   clear.

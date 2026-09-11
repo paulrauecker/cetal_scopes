@@ -15,9 +15,11 @@ the sample-rate sweep). Working tree has uncommitted changes on `main` (`fab7c4d
 - Still **not** implemented (milestone 1 remainder): `Antenna`, metadata models,
   `load_capture`/`save_capture` (`io.py`), `Shot`.
 - Hardware is validated: SDS6204L over LAN, multi-channel capture works.
-- Main open problem: the scope's **deterministic ADC interleave spurs** (combs)
-  at `fs/8`, `fs/4`, `fs/2`. They are not fixable by self-cal in practice; the
-  robust answer is analysis-side (coherent detection / spur masking).
+- The ADC comb is **root-caused**: a 256-sample pattern from the 16-bit transfer
+  path, spurs at `k*fs/256`. The driver defaults to `WORD`
+  (`sample_width="BYTE"` is a lossy top-byte truncation, not an escape), and
+  `analysis.remove_adc_comb()` removes the comb in software. See the comb
+  section below for the full picture.
 
 ---
 
@@ -74,7 +76,7 @@ src/cetal_scopes/
     siglent.py         # SiglentSDS6204L, transports, WAVEDESC parsing
   analysis/
     results.py         # Spectrum, ChannelStats, Tone
-    time.py            # gate, subtract_baseline, detrend, resample
+    time.py            # gate, subtract_baseline, detrend, resample, remove_adc_comb
     spectral.py        # window_values, fft, band_amplitude, tone_amplitude
     analytic.py        # analytic_signal, envelope, inst. phase/frequency
     metrics.py         # stats
@@ -84,12 +86,13 @@ src/cetal_scopes/
 
 Tests: `tests/test_capture.py`, `test_channel.py`, `test_scope_base.py`,
 `test_siglent.py`, `test_analysis_{time,spectral,analytic,metrics}.py`,
-`test_plotting.py`. 105 passing, ~94% coverage.
+`test_plotting.py`. 115 passing, ~94% coverage.
 
 ### Analysis API cheat-sheet
 ```python
 from cetal_scopes.analysis import (
     gate, subtract_baseline, detrend, resample,          # time
+    remove_adc_comb,                                      # ADC comb removal
     fft, band_amplitude, tone_amplitude, window_values,  # spectral
     analytic_signal, envelope,                            # analytic
     instantaneous_phase, instantaneous_frequency,
@@ -104,6 +107,9 @@ from cetal_scopes.analysis import (
 - `tone_amplitude(channel, frequency) -> Tone` — **coherent** detection;
   returns `amplitude` and `phase` (radians). Immune to the combs. Use for known
   tones and for any phase/vector work.
+- `remove_adc_comb(channel, period=256) -> Channel` — subtracts the 256-phase
+  pattern that produces the `k*fs/256` comb (DC preserved). Use for broadband /
+  unknown-tone spectra; not needed for coherent `tone_amplitude`.
 - `envelope(channel) -> Channel` — Hilbert envelope (drop `raw`).
 
 ---
@@ -140,18 +146,30 @@ fadd1a2 Add Scope ABC driver template
 - After a run/glitch, `acquire()` may need `:TRIGger:STOP` before `RUN` to
   re-arm (the driver now does this).
 
-### ADC interleave spurs ("the comb")
-- Deterministic peaks at **`fs/8` (1.25 GHz), `fs/4` (2.5 GHz), `fs/2`
-  (5 GHz)** at 10 GS/s, present on **every channel including open C4**.
-- They are in the digitizer, **not** caused by the 2 GHz analog bandwidth or the
-  input signal. Self-cal did not remove them.
-- They are usually the largest bins, so **`np.argmax(spectrum)` is misleading**.
-  Analyze a band (`band_amplitude`) or use `tone_amplitude`.
-- The 500 MHz measurement (coherent, 100 k pts): C1 1.3 mV, C2 2.0 mV,
-  C3 0.4 mV, C4 0.13 mV; ~20–30 dB SNR on the antennas vs floor. The 1.25 GHz
-  spur is 4–8 mV — bigger than the tone — which is exactly why coherent detection
-  matters.
+### ADC comb ("the comb") — root-caused
+- The SDS6204L is an **8-bit instrument**; its 16-bit `WORD` (HD transfer) path
+  adds a deterministic pattern with a **256-sample period**, so the spurs sit at
+  every multiple of `fs/256` (~39.06 MHz at 10 GS/s). `fs/8` (1.25 GHz), `fs/4`
+  (2.5 GHz) and `fs/2` (5 GHz) are just the strongest harmonics — there are many
+  more (verified by phase-mean removal for `P = 8,16,32,64,128,256`).
+- Present on **every channel including open C4**; not from the analog front end
+  (a 20 MHz `:CHANnel:BWLimit` does not remove it) and not removed by self-cal.
+  `:ACQuire:RESolution` is locked at `16Bits` (8/10/12 are rejected).
+- **Width does not matter.** `:WAVeform:WIDTh BYTE` returns exactly the top byte
+  of the 16-bit word (`WORD >> 8`); it is a coarse staircase (~94 mV/step at
+  1 V/div) that discards the waveform and **still carries the comb**. The driver
+  now defaults to `WORD` (with a `sample_width` option); BYTE is not an escape.
+- The comb is a **fixed ~10–12 ADC codes**, so its size in volts scales with
+  `V/div` while a real signal does not. Fill the ADC range with the signal, or
+  use `analysis.remove_adc_comb()` (subtracts the 256-phase pattern, DC
+  preserved) for broadband work. Coherent `tone_amplitude` is immune.
+- At 10 GS/s, 1 V/div: 1.25 GHz ~4 mV, 2.5 GHz ~2 mV, 5 GHz ~6–8 mV; the
+  500 MHz tone is ~1.3–3 mV on C1–C3 (C4 open ~0.02 mV). At 20 mV/div the comb
+  drops to ~0.1 mV. `remove_adc_comb` zeroes the comb bins.
 - There is also a coupled ambient comb (~429/470/515/540/590/625 MHz) on C4.
+- Live A/B figures from this session: `/tmp/opencode/ab_word_byte_vdiv_1.png`,
+  `..._0.02.png`, `/tmp/opencode/comb_vs_vdiv.png`,
+  `/tmp/opencode/spectra_4ch_20mvdiv.png`.
 
 ### Timebase enum off-by-one
 - `WAVEDESC` offset `0x144` (`tdiv`) indexes the s/div table. On this firmware
@@ -225,14 +243,12 @@ Also fixed earlier: `TDIV_ENUM` off-by-one; counter-based acquisition
 3. **Milestone 1 remainder:** `antenna.py` (id, sensitivity, orientation,
    cable delay, calibration), pydantic metadata, `io.py`
    (`load_capture`/`save_capture`, JSON + `.volts.npy` + `.raw.npy`), `shot.py`.
-4. **Sample-rate sweep:** vary timebase with `MMANagement AUTO` first, read
-   `:ACQuire:SRATe?`, measure the open channel, and see whether a lower `fs`
-   moves/removes the fs/8 spur. 500 MHz needs ≳1.5 GS/s. Now unblocked by the
-   `_fetch_codes` fix; `FMDepth` (fixed memory depth) can be tried next, which is
-   exactly the case that used to crash.
-5. Optional: `remove_spurs(spectrum, frequencies, half_width)` helper to mask
-   known combs in broadband spectra; and learn a reusable ambient-spur list from
-   the open C4.
+4. **Sample-rate sweep:** done for 10→0.5 GS/s — the comb does not go away; it
+   is tied to the internal 10 GS/s ADC (the 39.1 MHz line shifts/aliases, the
+   1.25/2.5 GHz lines stay). No timebase escapes it. `FMDepth` (fixed memory
+   depth) can still be exercised now that `_fetch_codes` is robust.
+5. Done: `analysis.remove_adc_comb()` (256-phase subtraction). Still optional:
+   learn a reusable ambient-spur list from the open C4.
 
 ---
 

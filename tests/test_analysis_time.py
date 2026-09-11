@@ -5,6 +5,7 @@ from cetal_scopes import Channel
 from cetal_scopes.analysis import (
     detrend,
     gate,
+    remove_adc_comb,
     resample,
     subtract_baseline,
 )
@@ -105,3 +106,44 @@ def test_resample_bad_dt() -> None:
 def test_resample_bad_n() -> None:
     with pytest.raises(ValueError, match="n must be positive"):
         resample(make_channel([0, 1, 2, 3]), n=0)
+
+
+def _coherent_amplitude(volts: np.ndarray, frequency: float) -> float:
+    index = np.arange(volts.size)
+    kernel = np.exp(-2j * np.pi * frequency * index)
+    return float(2.0 * np.abs(np.dot(volts - volts.mean(), kernel)) / volts.size)
+
+
+def test_remove_adc_comb_removes_pattern_and_keeps_tone() -> None:
+    period = 8
+    n = 2048
+    pattern = np.array([0.5, -0.3, 0.2, -0.1, 0.4, -0.2, 0.1, -0.4])
+    tone_bin = 100  # an exact DFT bin, not a multiple of n / period
+    index = np.arange(n)
+    tone = 0.25 * np.sin(2 * np.pi * tone_bin * index / n)
+    channel = make_channel(list(pattern[index % period] + tone))
+
+    result = remove_adc_comb(channel, period=period)
+
+    before = _coherent_amplitude(channel.volts, tone_bin / n)
+    after = _coherent_amplitude(result.volts, tone_bin / n)
+    assert after == pytest.approx(before, rel=1e-9)
+    for k in range(1, period):
+        assert _coherent_amplitude(result.volts, k / period) < 1e-9
+
+
+def test_remove_adc_comb_preserves_dc() -> None:
+    values = np.tile([1.0, 2.0, 3.0, 4.0], 4)
+    result = remove_adc_comb(make_channel(list(values)), period=4)
+    assert result.volts.mean() == pytest.approx(values.mean())
+    np.testing.assert_allclose(result.volts, values.mean())
+
+
+def test_remove_adc_comb_rejects_bad_period() -> None:
+    with pytest.raises(ValueError, match="at least 2"):
+        remove_adc_comb(make_channel([1, 2, 3, 4]), period=1)
+
+
+def test_remove_adc_comb_rejects_short_channel() -> None:
+    with pytest.raises(ValueError, match="shorter than one comb period"):
+        remove_adc_comb(make_channel([1, 2, 3]), period=8)
