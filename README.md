@@ -7,3 +7,6 @@ Goal: to streamline the capturing of oscilloscope data from various sources as w
 
 ## Viewing the Docs
 `uv run mkdocs serve`
+
+## Docs online
+Please visit (the docs)[https://paulrauecker.github.io/cetal_scopes/]
