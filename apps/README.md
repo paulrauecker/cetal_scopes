@@ -22,3 +22,5 @@ Apps are linted and type-checked in CI, but not counted in library coverage.
 - `bdot_probe/` — live `dB/dt` and integrated `B` for a B-dot probe/triad.
 - `bdot_web/` — Dash/Plotly browser analysis for B-dot shots (a uv workspace
   member; needs `dash`/`plotly`, so run `uv sync --all-packages`).
+- `sg8_sweep/` — SG8 generator frequency-response sweep against a scope channel.
+- `rf_waterfall/` — live or recorded RF waterfall (spectrogram) of a scope channel.

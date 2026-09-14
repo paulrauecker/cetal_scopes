@@ -37,10 +37,10 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-ra --cov=cetal_scopes --cov-report=term-missing"
 testpaths = ["tests", "apps"]
-pythonpath = ["apps/realtime_viewer", "apps/bdot_probe", "apps/bdot_web", "apps/sg8_sweep"]
+pythonpath = ["apps/realtime_viewer", "apps/bdot_probe", "apps/bdot_web", "apps/sg8_sweep", "apps/rf_waterfall"]
 
 [tool.pyright]
-extraPaths = ["apps/realtime_viewer", "apps/bdot_probe", "apps/bdot_web", "apps/sg8_sweep"]
+extraPaths = ["apps/realtime_viewer", "apps/bdot_probe", "apps/bdot_web", "apps/sg8_sweep", "apps/rf_waterfall"]
 
 [tool.uv.workspace]
 members = ["apps/bdot_web"]

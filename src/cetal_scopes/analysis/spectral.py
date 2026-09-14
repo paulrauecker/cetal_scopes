@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import detrend as _scipy_detrend
 from scipy.signal import get_window
 
 from cetal_scopes.analysis._util import DetrendMode
-from cetal_scopes.analysis.results import Spectrum, Tone
+from cetal_scopes.analysis.results import Spectrogram, Spectrum, Tone
 from cetal_scopes.channel import Channel
 
-__all__ = ["band_amplitude", "fft", "tone_amplitude", "window_values"]
+__all__ = [
+    "WaterfallBuffer",
+    "band_amplitude",
+    "fft",
+    "stft",
+    "tone_amplitude",
+    "window_values",
+]
 
 
 def window_values(channel: Channel, *, window: str = "hann") -> NDArray[np.float64]:
@@ -86,6 +95,155 @@ def fft(
         psd=np.asarray(psd, dtype=np.float64),
         window=window,
     )
+
+
+class WaterfallBuffer:
+    """A fixed-depth rolling buffer of spectra, one row per :meth:`push`.
+
+    Each call to :meth:`push` runs :func:`fft` on a channel and rolls the
+    result into a ``(depth, n_freq)`` grid, oldest row first. This is the
+    shared core of a waterfall/spectrogram display: a live view calls
+    :meth:`push` once per acquisition and reads :attr:`amplitude` directly;
+    a fixed-length recording calls :meth:`push` in a plain loop and then
+    :meth:`to_spectrogram` once it has enough rows.
+
+    Every pushed channel must share the same frequency axis (same sample
+    count and ``dt`` as the first push); a mismatch raises ``ValueError``
+    rather than silently resampling.
+
+    A row's time (see :attr:`Spectrogram.times`) defaults to the wall-clock
+    moment it was pushed, in seconds since the first push -- not the
+    channel's own ``t0``, which is a within-record offset (usually ``0.0``)
+    and says nothing about when successive acquisitions happened. Pass an
+    explicit ``t`` to :meth:`push` to override this, e.g. for :func:`stft`,
+    where each row is a slice of a *single* record and the physically
+    meaningful time is the slice's position within it, not when the push
+    call happened to run.
+    """
+
+    def __init__(
+        self,
+        depth: int,
+        *,
+        window: str = "hann",
+        detrend: DetrendMode | None = "constant",
+    ) -> None:
+        if depth < 1:
+            raise ValueError(f"depth must be >= 1, got {depth}")
+        self._depth = depth
+        self._window = window
+        self._detrend: DetrendMode | None = detrend
+        self._freq: NDArray[np.float64] | None = None
+        self._amplitude = np.full((depth, 0), np.nan, dtype=np.float64)
+        self._times = np.full(depth, np.nan, dtype=np.float64)
+        self._n_pushed = 0
+        self._t_start: float | None = None
+
+    def push(self, channel: Channel, *, t: float | None = None) -> Spectrum:
+        """Compute :func:`fft` on ``channel`` and roll it into the buffer.
+
+        ``t`` overrides the row's default wall-clock time (see the class
+        docstring); pass it when the caller has a more meaningful time axis
+        of its own.
+        """
+        spectrum = fft(channel, window=self._window, detrend=self._detrend)
+        if self._freq is None:
+            self._freq = spectrum.freq
+            self._amplitude = np.full(
+                (self._depth, spectrum.freq.size), np.nan, dtype=np.float64
+            )
+        elif spectrum.freq.shape != self._freq.shape or not np.allclose(
+            spectrum.freq, self._freq
+        ):
+            raise ValueError(
+                "channel's frequency axis does not match the buffer's "
+                f"(expected {self._freq.size} bins, got {spectrum.freq.size})"
+            )
+        if t is None:
+            if self._t_start is None:
+                self._t_start = time.monotonic()
+            t = time.monotonic() - self._t_start
+        self._amplitude = np.roll(self._amplitude, -1, axis=0)
+        self._amplitude[-1] = spectrum.amplitude
+        self._times = np.roll(self._times, -1)
+        self._times[-1] = t
+        self._n_pushed += 1
+        return spectrum
+
+    @property
+    def freq(self) -> NDArray[np.float64]:
+        """Shared frequency axis, or an empty array before the first push."""
+        return np.zeros(0) if self._freq is None else self._freq
+
+    @property
+    def amplitude(self) -> NDArray[np.float64]:
+        """``(depth, n_freq)`` grid; unfilled rows are NaN until the buffer fills."""
+        return self._amplitude
+
+    @property
+    def n_pushed(self) -> int:
+        """Total number of rows pushed so far (may exceed ``depth``)."""
+        return self._n_pushed
+
+    def to_spectrogram(self) -> Spectrogram:
+        """Return the buffer's current contents as a :class:`Spectrogram`."""
+        return Spectrogram(
+            freq=self.freq,
+            times=self._times.copy(),
+            amplitude=self._amplitude.copy(),
+            window=self._window,
+        )
+
+
+def stft(
+    channel: Channel,
+    *,
+    segment_samples: int,
+    hop_samples: int | None = None,
+    window: str = "hann",
+    detrend: DetrendMode | None = "constant",
+) -> Spectrogram:
+    """Short-time Fourier transform: a spectrogram of a *single* record.
+
+    Slices ``channel`` into overlapping ``segment_samples``-long windows,
+    hopping by ``hop_samples`` (default ``segment_samples // 2``, i.e. 50%
+    overlap), and stacks each slice's :func:`fft` into a :class:`Spectrogram`
+    via :class:`WaterfallBuffer`.
+
+    Unlike :class:`WaterfallBuffer` pushed directly across *separate*
+    acquisitions (where a row's time is the wall-clock moment it was
+    pushed), each row's time here is the slice's **center time within the
+    channel** -- the physically meaningful axis for watching one transient's
+    spectral content evolve, e.g. a single triggered EMP capture.
+
+    Raises
+    ------
+    ValueError
+        If ``segment_samples`` doesn't fit within the channel, or
+        ``hop_samples`` is not positive.
+    """
+    if not (1 <= segment_samples <= channel.n_samples):
+        raise ValueError(
+            f"segment_samples must be in [1, {channel.n_samples}], got {segment_samples}"
+        )
+    hop = segment_samples // 2 if hop_samples is None else hop_samples
+    if hop < 1:
+        raise ValueError(f"hop_samples must be >= 1, got {hop}")
+
+    starts = list(range(0, channel.n_samples - segment_samples + 1, hop))
+    buffer = WaterfallBuffer(len(starts), window=window, detrend=detrend)
+    for start in starts:
+        segment = Channel(
+            name=channel.name,
+            volts=channel.volts[start : start + segment_samples],
+            t0=channel.t0 + start * channel.dt,
+            dt=channel.dt,
+            antenna=channel.antenna,
+            unit=channel.unit,
+        )
+        center_time = segment.t0 + 0.5 * segment_samples * channel.dt
+        buffer.push(segment, t=center_time)
+    return buffer.to_spectrogram()
 
 
 def band_amplitude(

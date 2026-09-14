@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["ChannelStats", "Spectrum", "TimeOffset", "Tone"]
+__all__ = ["ChannelStats", "Spectrogram", "Spectrum", "TimeOffset", "Tone"]
 
 
 @dataclass(frozen=True, eq=False)
@@ -58,6 +58,54 @@ class Spectrum:
         """Return the ``(frequency, amplitude)`` of the largest amplitude bin."""
         index = int(np.argmax(self.amplitude))
         return float(self.freq[index]), float(self.amplitude[index])
+
+
+@dataclass(frozen=True, eq=False)
+class Spectrogram:
+    """A time x frequency amplitude grid, produced by :class:`~cetal_scopes.analysis.spectral.WaterfallBuffer`.
+
+    Attributes
+    ----------
+    freq : numpy.ndarray
+        Frequency axis in Hz, shared by every row.
+    times : numpy.ndarray
+        Time of each row, in seconds, oldest to newest -- see
+        :meth:`~cetal_scopes.analysis.spectral.WaterfallBuffer.push` for what
+        this means (wall-clock by default, or an explicit override such as
+        :func:`~cetal_scopes.analysis.spectral.stft`'s segment center time).
+    amplitude : numpy.ndarray
+        One-sided amplitude, shape ``(n_rows, n_freq)``, oldest row first.
+    window : str
+        Name of the window applied before each row's transform.
+    """
+
+    freq: NDArray[np.float64]
+    times: NDArray[np.float64]
+    amplitude: NDArray[np.float64]
+    window: str = "hann"
+
+    @property
+    def n_rows(self) -> int:
+        """Number of stacked spectra."""
+        return int(self.amplitude.shape[0])
+
+    @property
+    def n_bins(self) -> int:
+        """Number of frequency bins."""
+        return int(self.freq.size)
+
+    def peak(self) -> tuple[float, float, float]:
+        """Return ``(time, frequency, amplitude)`` of the largest amplitude bin.
+
+        NaN rows (e.g. a :class:`~cetal_scopes.analysis.spectral.WaterfallBuffer`
+        that hasn't filled yet) are ignored.
+        """
+        row, col = np.unravel_index(np.nanargmax(self.amplitude), self.amplitude.shape)
+        return (
+            float(self.times[row]),
+            float(self.freq[col]),
+            float(self.amplitude[row, col]),
+        )
 
 
 @dataclass(frozen=True)

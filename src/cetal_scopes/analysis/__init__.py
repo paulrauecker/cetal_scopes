@@ -6,7 +6,7 @@ The subpackage is split by domain:
 - :mod:`~cetal_scopes.analysis.analytic` — Hilbert/analytic-signal operations.
 - :mod:`~cetal_scopes.analysis.fields` — B-dot calibration to field units.
 - :mod:`~cetal_scopes.analysis.metrics` — scalar metrics.
-- :mod:`~cetal_scopes.analysis.spectral` — windowing and FFT.
+- :mod:`~cetal_scopes.analysis.spectral` — windowing, FFT, and spectrograms.
 - :mod:`~cetal_scopes.analysis.time` — gating, baselines, detrending, resampling.
 
 Functions take and/or return :class:`~cetal_scopes.channel.Channel` objects and
@@ -22,10 +22,18 @@ from cetal_scopes.analysis.analytic import (
 )
 from cetal_scopes.analysis.fields import b_field, b_field_rate, b_magnitude
 from cetal_scopes.analysis.metrics import stats
-from cetal_scopes.analysis.results import ChannelStats, Spectrum, TimeOffset, Tone
+from cetal_scopes.analysis.results import (
+    ChannelStats,
+    Spectrogram,
+    Spectrum,
+    TimeOffset,
+    Tone,
+)
 from cetal_scopes.analysis.spectral import (
+    WaterfallBuffer,
     band_amplitude,
     fft,
+    stft,
     tone_amplitude,
     window_values,
 )
@@ -39,9 +47,11 @@ from cetal_scopes.analysis.time import (
 
 __all__ = [
     "ChannelStats",
+    "Spectrogram",
     "Spectrum",
     "TimeOffset",
     "Tone",
+    "WaterfallBuffer",
     "analytic_signal",
     "b_field",
     "b_field_rate",
@@ -57,6 +67,7 @@ __all__ = [
     "remove_adc_comb",
     "resample",
     "stats",
+    "stft",
     "subtract_baseline",
     "tone_amplitude",
     "window_values",
