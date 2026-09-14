@@ -8,6 +8,7 @@ laser-matter interaction diagnostics.
 
 - Normalizes captures from multiple oscilloscope models into one container class
 - Per-channel sensors (`Antenna`) with frequency-dependent complex calibration
+- B-dot analysis: `dB/dt` and `B` in physical units, plus triad magnitude
 - `Shot` groups captures across instruments with measured time offsets
 - Pydantic-validated metadata
 - JSON + `.npy` sidecar storage format

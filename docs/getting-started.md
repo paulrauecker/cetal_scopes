@@ -97,6 +97,24 @@ aligned = shot.aligned_channel("m4i", "C1")    # t0 corrected, data shared
 t_start, t_end = shot.time_bounds()
 ```
 
+## Recovering the field from a B-dot
+
+A B-dot's `TransferFunction` maps volts to `dB/dt`; integrating once gives `B`:
+
+```python
+from cetal_scopes.analysis import b_field, b_field_rate, b_magnitude
+
+db_dt = b_field_rate(capture["C1"])   # T/s
+bx = b_field(capture["C1"])           # T
+by = b_field(capture["C2"])
+bz = b_field(capture["C3"])
+bmag = b_magnitude(bx, by, bz)        # |B| in T
+```
+
+The recovered `Channel`s carry `unit="T"` / `"T/s"` and keep their antenna.
+`b_field` raises when significant signal energy lies outside the calibrated band;
+pass `outside="zero"` or `"clamp"` to band-limit instead.
+
 ## Supported scopes
 
 *(list vendors/models as parsers are implemented)*

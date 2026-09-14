@@ -32,6 +32,7 @@ rejected (`extra="forbid"`) and `format_version` must match the reader.
   "channels": [
     {
       "name": "C1",
+      "unit": "T/s",
       "antenna": {
         "name": "Bdot-X",
         "kind": "b-dot",
@@ -46,7 +47,7 @@ rejected (`extra="forbid"`) and `format_version` must match the reader.
         }
       }
     },
-    { "name": "C2", "antenna": null }
+    { "name": "C2", "unit": "V", "antenna": null }
   ],
   "metadata": { "instrument": "siglent" }
 }
@@ -62,6 +63,8 @@ Field notes:
 - `volts_sidecar` — required basename of the float64 sidecar.
 - `raw_sidecar` — optional basename; `null` when no raw codes were saved.
 - `channels[].antenna` — inline sensor description, `null` when unknown.
+- `channels[].unit` — physical unit of that row, default ``"V"``. Calibrated
+  data (e.g. `analysis.b_field`) uses ``"T"`` / ``"T/s"``.
 - `metadata` — free-form provenance, persisted verbatim.
 
 ## Antenna calibration

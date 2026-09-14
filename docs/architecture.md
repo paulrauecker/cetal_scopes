@@ -30,7 +30,8 @@ Capture                       acquisition result + persistence unit
         │
         ▼
 Channel                       per-channel row-view of the Capture
- └─ antenna: Antenna          physical detector identity/calibration
+ ├─ antenna: Antenna          physical detector identity/calibration
+ └─ unit: str                 unit of the samples (V, T, T/s, ...)
         │
         ▼
 Shot                          runtime-only convenience aggregator of Captures
@@ -50,9 +51,10 @@ Responsibilities:
 - **`Channel`** — a per-channel view onto a `Capture`'s arrays, plus its own
   metadata and an assigned `Antenna`. Kept separate so analysis can reason
   about a single detector without slicing arrays by hand.
-- **`Antenna`** — the physical detector/sensor attached to a channel
-  (sensitivity, orientation, cable delay, calibration). Used by analysis to
-  turn volts into physical units.
+- **`Antenna`** — the physical detector/sensor attached to a channel (kind,
+  orientation, cable delay, calibration). Its frequency-dependent complex
+  `TransferFunction` lets analysis turn volts into physical units, e.g.
+  `analysis.b_field` integrating a B-dot's `V` to `B` in tesla.
 - **`Shot`** — groups several `Capture`s belonging to one experiment, each under
   a label, together with a scalar per-capture time offset that maps them onto a
   common axis. It is an in-memory convenience only; it is not persisted.

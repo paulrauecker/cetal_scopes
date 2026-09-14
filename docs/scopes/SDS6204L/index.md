@@ -45,6 +45,14 @@ is not ready — `_fetch_codes` raises rather than returning garbage.
     the scope is warm.
   - After a run, `acquire()` may need a `:TRIGger:STOP` before `RUN` will
     re-arm the acquisition engine.
+- **The edge-trigger level is clamped to the source channel's vertical range.**
+  The settable level is about `+/-4.5 * V/div` around the channel offset, so at
+  a sensitive scale the whole range can sit inside the noise. Measured on this
+  unit: with C1 at `0.5 mV/div`, `:TRIGger:EDGE:LEVel 0.05` reads back
+  `2.25E-03`; at `10 mV/div` it reads `4.5E-02`; at `20 mV/div` and above it
+  accepts `0.05`. The write is silently clamped, so read `:TRIGger:EDGE:LEVel?`
+  back (or use `SiglentSDS6204L.trigger_level()`) and coarsen `V/div` / add a
+  vertical offset to trigger above the noise.
 - **ADC comb (16-bit path).** The SDS6204L is an 8-bit instrument whose `WORD`
   (16-bit HD) transfer path adds a deterministic pattern with a **256-sample
   period**: spurs at every multiple of `fs / 256` (~39.06 MHz at 10 GS/s), of

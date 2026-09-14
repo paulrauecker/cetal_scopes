@@ -500,7 +500,7 @@ Below is an alphabetical breakdown of all command subsystems, headers, short for
 * **Edge Trigger Commands:** *(Ref: Doc p. 485–495 / PDF p. 486–496)*
   * `:TRIGger:EDGE:SOURce <src>`: Channel source (`C1`..`C4`, `D0`..`D15`, `EX`, `EX5`, `LINE`).
   * `:TRIGger:EDGE:SLOPe <type>`: Slope (`RISing` | `FALLing` | `ALTernate`).
-  * `:TRIGger:EDGE:LEVel <value>`: Threshold voltage level.
+  * `:TRIGger:EDGE:LEVel <value>`: Threshold voltage level. Clamped to about `+/-4.5 * V/div` of the source channel around its offset (see `:TRIGger:EDGE:LEVel?`).
   * `:TRIGger:EDGE:COUPling <mode>`: Coupling (`DC` | `AC` | `LFREJect` | `HFREJect`).
   * `:TRIGger:EDGE:HOLDoff <type>`: Holdoff type (`OFF` | `EVENts` | `TIME`).
   * `:TRIGger:EDGE:HLDTime <val>` / `:HLDEVent <val>`: Holdoff duration or event count.

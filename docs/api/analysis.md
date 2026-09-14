@@ -4,6 +4,8 @@
 
 ::: cetal_scopes.analysis.alignment
 
+::: cetal_scopes.analysis.fields
+
 ::: cetal_scopes.analysis.spectral
 
 ::: cetal_scopes.analysis.analytic
