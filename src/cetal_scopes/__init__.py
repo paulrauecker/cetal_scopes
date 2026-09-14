@@ -3,6 +3,7 @@
 from cetal_scopes.antenna import Antenna, TransferFunction
 from cetal_scopes.capture import Capture
 from cetal_scopes.channel import Channel
+from cetal_scopes.generators.sg8 import SG8SignalGenerator
 from cetal_scopes.scopes.base import Scope
 from cetal_scopes.scopes.siglent import SiglentSDS6204L
 from cetal_scopes.shot import Shot
@@ -12,6 +13,7 @@ __all__ = [
     "Antenna",
     "Capture",
     "Channel",
+    "SG8SignalGenerator",
     "Scope",
     "Shot",
     "SiglentSDS6204L",
