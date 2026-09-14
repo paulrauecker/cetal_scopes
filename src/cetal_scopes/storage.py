@@ -108,11 +108,16 @@ def save_capture(capture: Capture, path: str | os.PathLike[str]) -> Path:
 
     channels: list[ChannelMetadata] = []
     for name in names:
-        antenna = capture.channels[name].antenna
+        channel = capture.channels[name]
         channels.append(
             ChannelMetadata(
                 name=name,
-                antenna=None if antenna is None else AntennaModel.from_runtime(antenna),
+                antenna=(
+                    None
+                    if channel.antenna is None
+                    else AntennaModel.from_runtime(channel.antenna)
+                ),
+                unit=channel.unit,
             )
         )
 
@@ -202,6 +207,7 @@ def load_capture(path: str | os.PathLike[str]) -> Capture:
         for channel in file.channels
         if channel.antenna is not None
     }
+    units = {channel.name: channel.unit for channel in file.channels}
     return Capture(
         volts=volts,
         t0=file.t0,
@@ -209,5 +215,6 @@ def load_capture(path: str | os.PathLike[str]) -> Capture:
         channel_names=tuple(file.channel_names),
         raw=raw,
         antennas=antennas,
+        units=units,
         metadata=dict(file.metadata),
     )

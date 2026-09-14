@@ -51,6 +51,7 @@ def gate(
         dt=dt,
         raw=None if channel.raw is None else channel.raw[i0:i1],
         antenna=channel.antenna,
+        unit=channel.unit,
     )
 
 
@@ -195,4 +196,5 @@ def resample(
         t0=channel.t0,
         dt=new_dt,
         antenna=channel.antenna,
+        unit=channel.unit,
     )

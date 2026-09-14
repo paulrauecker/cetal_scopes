@@ -1,0 +1,16 @@
+[project]
+name = "bdot-web"
+version = "0.1.0"
+description = "Interactive Dash/Plotly analysis for B-dot shots."
+requires-python = ">=3.12"
+dependencies = [
+    "cetal-scopes",
+    "dash>=3.0",
+    "plotly>=6.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+cetal-scopes = { workspace = true }

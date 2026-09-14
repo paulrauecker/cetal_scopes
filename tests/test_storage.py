@@ -31,6 +31,7 @@ def make_capture() -> Capture:
         channel_names=("C1", "C2"),
         raw=np.arange(12, dtype=np.int16).reshape(2, 6),
         antennas={"C1": make_antenna()},
+        units={"C1": "T/s"},
         metadata={"instrument": "siglent", "notes": "triad"},
     )
 
@@ -55,6 +56,8 @@ def test_round_trip_preserves_everything(tmp_path: Path) -> None:
     assert loaded.raw is not None
     np.testing.assert_array_equal(loaded.raw, capture.raw)
     assert loaded["C2"].antenna is None
+    assert loaded["C1"].unit == "T/s"
+    assert loaded["C2"].unit == "V"
 
     antenna = loaded["C1"].antenna
     assert antenna is not None

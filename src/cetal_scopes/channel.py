@@ -37,6 +37,9 @@ class Channel:
     antenna : Antenna, optional
         The physical sensor attached to this channel, persisted with the
         capture. ``None`` when the sensor is unknown.
+    unit : str, optional
+        Physical unit of :attr:`volts`. Defaults to ``"V"``; calibrated
+        analysis (e.g. a B-dot) changes it to ``"T"`` or ``"T/s"``.
 
     Attributes
     ----------
@@ -50,6 +53,7 @@ class Channel:
     dt: float
     raw: NDArray[Any] | None = None
     antenna: Antenna | None = None
+    unit: str = "V"
 
     @property
     def n_samples(self) -> int:

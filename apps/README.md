@@ -15,3 +15,10 @@ Guidelines:
   their own `pyproject.toml` rather than growing the library's dependency list.
 
 Apps are linted and type-checked in CI, but not counted in library coverage.
+
+## Current apps
+
+- `realtime_viewer/` — live signal + FFT panes for any `Scope` driver.
+- `bdot_probe/` — live `dB/dt` and integrated `B` for a B-dot probe/triad.
+- `bdot_web/` — Dash/Plotly browser analysis for B-dot shots (a uv workspace
+  member; needs `dash`/`plotly`, so run `uv sync --all-packages`).

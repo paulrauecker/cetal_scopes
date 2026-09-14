@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --all-packages
       - run: uv run ruff check src tests apps
       - run: uv run ruff format --check src tests apps
 
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --all-packages
       - run: uv run pyright src apps
 
   test:
@@ -27,5 +27,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --all-packages
       - run: uv run pytest

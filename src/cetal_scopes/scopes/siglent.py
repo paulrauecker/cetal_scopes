@@ -712,6 +712,15 @@ class SiglentSDS6204L(Scope):
         if slope is not None:
             self._write(f":TRIGger:EDGE:SLOPe {slope}")
 
+    def trigger_level(self) -> float:
+        """Return the edge-trigger level in volts, as the instrument reports it.
+
+        The level is clamped by the source channel's vertical range (roughly
+        ``+/-4.5 * V/div`` around its offset), so reading it back after
+        :meth:`set_edge_trigger` reveals a silently clamped request.
+        """
+        return float(self._query(":TRIGger:EDGE:LEVel?"))
+
     def set_acquire_type(self, acquire_type: str) -> None:
         """Set the acquisition type (e.g. ``NORMal``, ``AVERage,16``)."""
         self._write(f":ACQuire:TYPE {acquire_type}")

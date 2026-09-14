@@ -106,6 +106,7 @@ class ChannelMetadata(_Model):
 
     name: str
     antenna: AntennaModel | None = None
+    unit: str = "V"
 
 
 class CaptureFile(_Model):

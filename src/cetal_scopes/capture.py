@@ -46,6 +46,8 @@ class Capture:
     antennas : mapping of str to Antenna, optional
         Sensors keyed by channel name. Names not present in ``channel_names``
         are rejected. Unmapped channels get ``None``.
+    units : mapping of str to str, optional
+        Physical unit per channel name. Unmapped channels default to ``"V"``.
     metadata : dict, optional
         Free-form provenance (instrument, timestamp, notes), persisted verbatim.
 
@@ -61,6 +63,7 @@ class Capture:
     channel_names: tuple[str, ...] | None = None
     raw: NDArray[Any] | None = None
     antennas: Mapping[str, Antenna] | None = None
+    units: Mapping[str, str] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     channels: dict[str, Channel] = field(init=False, repr=False)
 
@@ -92,6 +95,7 @@ class Capture:
 
         self._set_channel_names(volts.shape[0])
         self._set_antennas()
+        self._set_units()
         self.channels = self._build_channels()
 
     def _set_channel_names(self, n_channels: int) -> None:
@@ -121,10 +125,22 @@ class Capture:
             )
         self.antennas = antennas
 
+    def _set_units(self) -> None:
+        if self.channel_names is None:  # pragma: no cover - set just above
+            raise RuntimeError("channel names not initialized")
+        units = {} if self.units is None else dict(self.units)
+        unknown = set(units) - set(self.channel_names)
+        if unknown:
+            raise ValueError(f"units given for unknown channels: {sorted(unknown)!r}")
+        if any(not unit for unit in units.values()):
+            raise ValueError("units must be non-empty strings")
+        self.units = units
+
     def _build_channels(self) -> dict[str, Channel]:
         if self.channel_names is None:  # pragma: no cover - set just above
             raise RuntimeError("channel names not initialized")
         antennas = self.antennas or {}
+        units = self.units or {}
         return {
             name: Channel(
                 name=name,
@@ -133,6 +149,7 @@ class Capture:
                 dt=self.dt,
                 raw=None if self.raw is None else self.raw[i],
                 antenna=antennas.get(name),
+                unit=units.get(name, "V"),
             )
             for i, name in enumerate(self.channel_names)
         }
@@ -152,6 +169,7 @@ class Capture:
             channel_names=self.channel_names,
             raw=self.raw,
             antennas=merged,
+            units=self.units,
             metadata=dict(self.metadata),
         )
 

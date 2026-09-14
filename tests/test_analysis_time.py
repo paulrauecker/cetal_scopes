@@ -149,9 +149,11 @@ def test_remove_adc_comb_rejects_short_channel() -> None:
         remove_adc_comb(make_channel([1, 2, 3]), period=8)
 
 
-def test_processing_preserves_antenna() -> None:
+def test_processing_preserves_antenna_and_unit() -> None:
     antenna = Antenna(name="Bdot-X", kind="b-dot")
-    channel = Channel(name="CH1", volts=np.arange(5.0), t0=0.0, dt=1.0, antenna=antenna)
+    channel = Channel(
+        name="CH1", volts=np.arange(5.0), t0=0.0, dt=1.0, antenna=antenna, unit="T"
+    )
     results = (
         gate(channel, t_start=1.0, t_end=3.0),
         subtract_baseline(channel),
@@ -160,3 +162,4 @@ def test_processing_preserves_antenna() -> None:
         remove_adc_comb(channel, period=2),
     )
     assert all(result.antenna is antenna for result in results)
+    assert all(result.unit == "T" for result in results)

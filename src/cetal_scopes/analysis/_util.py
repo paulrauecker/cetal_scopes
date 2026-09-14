@@ -15,12 +15,18 @@ DetrendMode = Literal["constant", "linear"]
 __all__ = ["DetrendMode", "with_volts"]
 
 
-def with_volts(channel: Channel, volts: NDArray[np.float64]) -> Channel:
+def with_volts(
+    channel: Channel,
+    volts: NDArray[np.float64],
+    *,
+    unit: str | None = None,
+) -> Channel:
     """Return a new channel with replaced voltages and no raw codes.
 
     Processed channels drop their ``raw`` codes because the samples no longer
     correspond one-to-one with the recorded ADC values. The antenna is carried
-    over, since the sensor identity is unchanged by processing.
+    over, since the sensor identity is unchanged by processing, and the unit is
+    preserved unless ``unit`` is given.
     """
     return Channel(
         name=channel.name,
@@ -28,4 +34,5 @@ def with_volts(channel: Channel, volts: NDArray[np.float64]) -> Channel:
         t0=channel.t0,
         dt=channel.dt,
         antenna=channel.antenna,
+        unit=channel.unit if unit is None else unit,
     )

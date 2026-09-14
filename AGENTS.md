@@ -12,12 +12,14 @@ interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
 against an SDS6204L over LAN (single-channel capture). A downstream
 `cetal_scopes.analysis` subpackage (time / spectral / analytic / metrics plus
 result classes) and `cetal_scopes.plotting` are implemented. Downstream
-applications live in `apps/` (currently a real-time signal/FFT viewer); they are
-not part of the library. `Shot` groups captures with per-capture time offsets
-and is in-memory only; the antenna-aware analysis helpers (turning a calibrated
-B-dot's volts into a field) described in `docs/architecture.md` are **not
-implemented yet**. Treat docs and docstrings as design intent, not current
-behavior — verify against source before relying on them.
+applications live in `apps/` (a real-time signal/FFT viewer, a Tk B-dot probe
+viewer, and a Dash/Plotly B-dot web app); they are not part of the library. The
+web app is a uv workspace member (`apps/bdot_web`) with its own `dash`/`plotly`
+dependencies. `Shot` groups captures with per-capture time offsets
+and is in-memory only; `analysis.fields` turns a calibrated B-dot's volts into
+`dB/dt` and `B`, and `analysis.alignment` measures inter-capture offsets. Treat
+docs and docstrings as design intent, not current behavior — verify against
+source before relying on them.
 
 ## Architecture
 
@@ -31,9 +33,9 @@ Read `docs/architecture.md` before changing the data model. In short:
   inline); `time` is derived (`t0 + arange(n) * dt`), never stored.
 - `Shot` groups `Capture`s in memory with per-capture time offsets; it is not
   persisted.
-- `cetal_scopes.analysis` (`time`, `spectral`, `analytic`, `metrics`, `results`)
-  operates on `Channel`s and returns `Spectrum`/`ChannelStats`; it never mutates
-  captures. `cetal_scopes.plotting` draws captures and spectra with matplotlib.
+- `cetal_scopes.analysis` (`time`, `spectral`, `analytic`, `metrics`, `fields`,
+  `alignment`, `results`) operates on `Channel`s and returns
+  `Spectrum`/`ChannelStats`/`TimeOffset`; it never mutates captures. `cetal_scopes.plotting` draws captures and spectra with matplotlib.
 - On disk: `<stem>.json` + `<stem>.volts.npy` + `<stem>.raw.npy`.
 - Vendor SDKs (`spcm`, `spcm-core`, `pyvisa`, `pyvisa-py`) are hard deps but
   imported lazily inside `scopes/` so core import and CI need no hardware.
@@ -60,7 +62,9 @@ Read `docs/architecture.md` before changing the data model. In short:
 
 ## Commands
 
-Setup first: `uv sync --all-groups` (direnv runs this automatically in the shell).
+Setup first: `uv sync --all-groups --all-packages` (direnv runs this
+automatically in the shell; `--all-packages` pulls in the `apps/bdot_web`
+workspace member's `dash`/`plotly`).
 
 - Lint: `uv run ruff check src tests apps`
 - Format: `uv run ruff format src tests apps` (CI enforces `--check`)
@@ -70,10 +74,10 @@ Setup first: `uv sync --all-groups` (direnv runs this automatically in the shell
   - App test: `uv run pytest apps/realtime_viewer/tests`
 - Docs preview: `uv run mkdocs serve` (build: `uv run mkdocs build`, output `site/`)
 
-Ruff defaults apply (line length 88, double quotes); `[tool.pyright]` adds
-`apps/realtime_viewer` to `extraPaths` so the app modules resolve. CI
-(`.github/workflows/ci.yml`) runs lint -> typecheck -> test on push to `main`
-only.
+  Ruff defaults apply (line length 88, double quotes); `[tool.pyright]` adds
+  `apps/realtime_viewer`, `apps/bdot_probe` and `apps/bdot_web` to `extraPaths`
+  so the app modules resolve. CI (`.github/workflows/ci.yml`) runs lint -> typecheck -> test on push
+  to `main` only.
 
 ## Conventions
 

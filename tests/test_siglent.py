@@ -65,6 +65,7 @@ class FakeTransport:
         status: str = "Stop",
         advance_on_run: bool = True,
         advance_on_query: bool = False,
+        trigger_level: str = "0.00E+00",
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
@@ -73,6 +74,7 @@ class FakeTransport:
         self.status = status
         self.advance_on_run = advance_on_run
         self.advance_on_query = advance_on_query
+        self.trigger_level = trigger_level
         self.num_acq = 0
         self.opened = False
         self.closed = False
@@ -102,6 +104,8 @@ class FakeTransport:
             return str(self.num_acq)
         if command == ":TRIGger:STATus?":
             return self.status
+        if command == ":TRIGger:EDGE:LEVel?":
+            return self.trigger_level
         raise AssertionError(f"unexpected query {command!r}")
 
     def query_block(self, command: str) -> bytes:
@@ -121,13 +125,16 @@ def make_driver(
     max_points: str = "1000",
     sample_width: str = "WORD",
     streaming: bool = False,
+    trigger_level: str = "0.00E+00",
 ) -> tuple[SiglentSDS6204L, FakeTransport]:
     descriptor = descriptor or make_descriptor()
     data_arrays = data_arrays or [
         np.array([0, 25, -25], dtype=np.int16),
         np.array([10, -10, 0], dtype=np.int16),
     ]
-    fake = FakeTransport(descriptor, data_arrays, max_points=max_points)
+    fake = FakeTransport(
+        descriptor, data_arrays, max_points=max_points, trigger_level=trigger_level
+    )
     return (
         SiglentSDS6204L(
             channels=channels,
@@ -509,6 +516,17 @@ def test_configure_rejects_non_mapping_trigger() -> None:
     scope.connect()
     with pytest.raises(TypeError, match="trigger must be a mapping"):
         scope.configure({"trigger": "C1"})
+
+
+def test_set_edge_trigger_writes_and_reads_level() -> None:
+    scope, transport = make_driver(trigger_level="2.25E-03")
+    scope.connect()
+    scope.set_edge_trigger(source="C1", level=0.05, slope="RISing")
+    assert ":TRIGger:EDGE:SOURce C1" in transport.written
+    assert ":TRIGger:EDGE:LEVel 0.05" in transport.written
+    assert ":TRIGger:EDGE:SLOPe RISing" in transport.written
+    # The instrument may report a clamped value; the getter must pass it through.
+    assert scope.trigger_level() == pytest.approx(2.25e-3)
 
 
 def test_configure_rejects_non_mapping_vertical() -> None:

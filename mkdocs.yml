@@ -25,6 +25,11 @@ nav:
       - Siglent SDS6204L:
           - Overview: scopes/SDS6204L/index.md
           - Native API: scopes/SDS6204L/code.md
+  - Signal Generators:
+      - SG8-HPSS10M-C2U42HP315:
+          - Overview: scopes/SG8-HPSS10M-C2U42HP315/index.md
+          - Native API: scopes/SG8-HPSS10M-C2U42HP315/code.md
+          - Manual: scopes/SG8-HPSS10M-C2U42HP315/manual.md
   - API Reference:
       - Overview: api/reference.md
       - Core containers: api/core.md
@@ -33,6 +38,8 @@ nav:
       - Plotting: api/plotting.md
   - Apps:
       - Real-time viewer: apps/realtime-viewer.md
+      - B-dot probe: apps/bdot-probe.md
+      - B-dot web app: apps/bdot-web.md
 
 plugins:
   - search

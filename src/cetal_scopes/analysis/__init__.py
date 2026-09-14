@@ -4,6 +4,7 @@ The subpackage is split by domain:
 
 - :mod:`~cetal_scopes.analysis.alignment` — cross-correlation time offsets.
 - :mod:`~cetal_scopes.analysis.analytic` — Hilbert/analytic-signal operations.
+- :mod:`~cetal_scopes.analysis.fields` — B-dot calibration to field units.
 - :mod:`~cetal_scopes.analysis.metrics` — scalar metrics.
 - :mod:`~cetal_scopes.analysis.spectral` — windowing and FFT.
 - :mod:`~cetal_scopes.analysis.time` — gating, baselines, detrending, resampling.
@@ -19,6 +20,7 @@ from cetal_scopes.analysis.analytic import (
     instantaneous_frequency,
     instantaneous_phase,
 )
+from cetal_scopes.analysis.fields import b_field, b_field_rate, b_magnitude
 from cetal_scopes.analysis.metrics import stats
 from cetal_scopes.analysis.results import ChannelStats, Spectrum, TimeOffset, Tone
 from cetal_scopes.analysis.spectral import (
@@ -41,6 +43,9 @@ __all__ = [
     "TimeOffset",
     "Tone",
     "analytic_signal",
+    "b_field",
+    "b_field_rate",
+    "b_magnitude",
     "band_amplitude",
     "detrend",
     "envelope",
