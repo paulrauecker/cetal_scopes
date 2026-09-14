@@ -8,6 +8,13 @@ response via coherent (matched-filter) detection at the commanded frequency,
 and plots one trace per channel: dB gain relative to the source level by
 default, or raw Vpp with ``--raw-volts``.
 
+The scope's timebase is set **once**, sized for ``--cycles`` periods of the
+sweep's *lowest* frequency, and reused unchanged for every point -- a scope
+holds its full real-time sample rate across a wide range of window sizes, so
+this gives every point the same generously large sample count for free,
+instead of shrinking (and so getting noisier) at the high end of the sweep
+the way a per-point, constant-cycle-count window would.
+
 There's no hardware interlock between the two instruments -- each frequency
 step confirms the SCPI command itself completed via ``*OPC?`` (per the SG8
 manual's own recommendation over a fixed delay), then still waits
@@ -18,6 +25,21 @@ and second half of its capture are independently measured and compared
 between them -- a sign the signal was still transitioning mid-capture -- is
 flagged on stderr and recorded per-channel in the output CSV
 (``--settle-warn-db`` / ``--settle-warn-min-vpp`` tune the threshold).
+
+Known hardware caveat: the SDS6204L's 16-bit acquisition path carries a
+deterministic ADC-interleave comb (period 256 samples, spurs at multiples of
+``fs/256``, e.g. ~39.06 MHz at 10 GSa/s -- see
+:func:`cetal_scopes.analysis.remove_adc_comb`). It's a fixed pattern in ADC
+*codes*, so it becomes a larger fraction of the signal -- and so more visible
+in a coherent-amplitude reading -- either with a coarser V/div (each code
+step is worth more volts) or with a longer capture window (more repeats of
+the comb per record). Both conditions are easy to hit here: the
+default-computed V/div (see ``--vdiv-divisor``) reflects the source's
+*theoretical* level, which is often far coarser than a real (e.g. radiated,
+not conducted) signal warrants, and the sweep's fixed window (see above) can
+be fairly long. If readings look implausibly large or erratic, especially
+near a multiple of ``fs/256``, pass a tighter ``--vdiv`` sized to the actual
+signal rather than the source level.
 
 Against real hardware (RF Out split/connected to C1-C3)::
 
@@ -120,7 +142,26 @@ def frequency_sweep(start: float, stop: float, points: int, *, log: bool = True)
 def timebase_for_frequency(
     freq: float, *, cycles: float = DEFAULT_CYCLES, grid_num: int = GRID_NUM
 ) -> float:
-    """Horizontal scale (s/div) that fits ``cycles`` periods of ``freq``."""
+    """Horizontal scale (s/div) that fits ``cycles`` periods of ``freq``.
+
+    :func:`run_sweep` calls this **once**, for the sweep's *lowest*
+    frequency, and uses that one window for every point -- not per
+    frequency. A per-point window sized to keep a constant cycle count
+    shrinks (and so starves the sample count, since the scope's sample
+    *rate* stays fixed regardless of timebase) as frequency rises: 20 cycles
+    at 10 MHz is a ~20,000-sample record, but 20 cycles at 2 GHz is only
+    ~100 samples. Too few samples starves both the scope's own FFT (which
+    visibly flattens) and :func:`coherent_amplitude`'s SNR -- which showed
+    up as spurious :func:`split_half_consistency_db` warnings that didn't
+    actually improve with more settling time, because they were measurement
+    noise, not drift. Measured against an SDS6204L with 3 channels active,
+    the scope holds its full real-time sample rate for windows up to ~200 us
+    (up to ~2,000,000 samples) before it has to drop the rate to keep up --
+    far larger than any window this sweep needs -- so fixing the window at
+    the lowest frequency's cycle count and reusing it everywhere gives every
+    point in the sweep the same generous sample count, low frequency or
+    high, with no per-point heuristic needed at all.
+    """
     if freq <= 0.0:
         raise ValueError(f"freq must be positive, got {freq!r}")
     return cycles / freq / grid_num
@@ -131,6 +172,24 @@ def expected_vpp(power_dbm: float, impedance: float = 50.0) -> float:
     watts = 1.0e-3 * 10.0 ** (power_dbm / 10.0)
     v_rms = math.sqrt(watts * impedance)
     return v_rms * 2.0 * math.sqrt(2.0)
+
+
+def resolve_vdiv(
+    power_dbm: float, impedance: float, divisor: float, override: float | None
+) -> float:
+    """Vertical scale (V/div) to configure on the scope.
+
+    Returns ``override`` unchanged when given. Otherwise derives it from the
+    *theoretical* source level, ``expected_vpp(power_dbm, impedance) /
+    divisor`` (floored at 1 mV/div) -- which reflects a conducted connection
+    at the commanded power, not necessarily the actual (e.g. radiated)
+    signal reaching the channel. Pass ``override`` when the real signal is
+    nowhere near that theoretical level.
+    """
+    if override is not None:
+        return override
+    vpp = expected_vpp(power_dbm, impedance)
+    return max(vpp / divisor, 1.0e-3)
 
 
 def _coherent_phasor(
@@ -241,16 +300,24 @@ def run_sweep(
 ) -> SweepResult:
     """Sweep ``generator`` over ``frequencies`` and measure each channel.
 
-    Resets and re-configures the generator once, then for every frequency:
-    sets it, waits for :meth:`SignalSource.operation_complete` so the *SCPI
-    command itself* is confirmed processed before counting any further
-    settling time (the SG8 manual recommends ``*OPC?`` over a fixed delay
-    for exactly this), adapts the scope timebase to keep ``cycles`` periods
-    on screen, waits ``settle`` seconds more as margin for the PLL/DDS to
-    physically settle (a real hardware effect ``*OPC?`` doesn't cover), and
-    measures each channel via :func:`coherent_amplitude` against the
-    generator's actual (read-back) frequency. RF Out is always turned off
-    again on exit, even on error.
+    Sets the scope's timebase **once**, sized to fit ``cycles`` periods of
+    the sweep's *lowest* frequency (see :func:`timebase_for_frequency`), and
+    reuses that one window for every point -- a scope holds its full
+    real-time sample rate across a wide range of window sizes (measured up
+    to ~200 us on an SDS6204L with 3 channels active), so a window sized for
+    the lowest frequency gives every higher frequency in the sweep the exact
+    same, generously large sample count for free, with no per-point
+    retuning needed.
+
+    Then, resets and re-configures the generator once, and for every
+    frequency: sets it, waits for :meth:`SignalSource.operation_complete` so
+    the *SCPI command itself* is confirmed processed before counting any
+    further settling time (the SG8 manual recommends ``*OPC?`` over a fixed
+    delay for exactly this), waits ``settle`` seconds more as margin for the
+    PLL/DDS to physically settle (a real hardware effect ``*OPC?`` doesn't
+    cover), and measures each channel via :func:`coherent_amplitude` against
+    the generator's actual (read-back) frequency. RF Out is always turned
+    off again on exit, even on error.
 
     There's still no hardware interlock between the two instruments --
     ``settle`` is a heuristic, not a guarantee -- so every point is also
@@ -271,6 +338,10 @@ def run_sweep(
     generator.set_power(power_dbm)
     generator.set_output(True)
 
+    if scope is not None and len(frequencies) > 0:
+        lowest_freq = float(np.min(frequencies))
+        scope.configure({"timebase": timebase_for_frequency(lowest_freq, cycles=cycles)})
+
     amplitudes = {ch: np.full(len(frequencies), np.nan) for ch in channels}
     settle_gap = {ch: np.full(len(frequencies), np.nan) for ch in channels}
     try:
@@ -278,10 +349,6 @@ def run_sweep(
             generator.set_frequency(float(freq))
             generator.operation_complete()
             point: dict[str, float] = {}
-            if scope is not None:
-                scope.configure(
-                    {"timebase": timebase_for_frequency(float(freq), cycles=cycles)}
-                )
             time.sleep(settle)
             actual_freq = generator.frequency()
             if scope is not None:
@@ -448,6 +515,14 @@ class DemoScope(Scope):
     Each channel gets an independent simulated single-pole low-pass response
     (see :data:`DEMO_CUTOFFS`) plus noise, so a demo sweep shows a plausible
     per-channel roll-off without any hardware attached.
+
+    Samples at a **fixed** ``dt`` and grows the sample count with the
+    requested window, capped at ``max_samples`` -- mirroring an SDS6204L,
+    which was measured holding its full real-time sample rate across a wide
+    range of window sizes rather than resampling to keep a fixed record
+    length. Getting this backwards (fixed sample count, ``dt`` scaling with
+    the window) would silently alias a high-frequency demo tone once
+    :func:`run_sweep` stopped re-adapting the timebase per point.
     """
 
     def __init__(
@@ -456,14 +531,16 @@ class DemoScope(Scope):
         *,
         channels: Sequence[str] = ("C1", "C2", "C3"),
         impedance: float = 50.0,
-        n_samples: int = 2000,
+        sample_rate: float = 10.0e9,
+        max_samples: int = 2_000_000,
         noise: float = 0.002,
         seed: int = 0,
     ) -> None:
         self._generator = generator
         self.channels = tuple(channels)
         self._impedance = impedance
-        self._n_samples = n_samples
+        self._dt = 1.0 / sample_rate
+        self._max_samples = max_samples
         self._noise = noise
         self._rng = np.random.default_rng(seed)
         self._timebase = 1.0e-8
@@ -478,8 +555,9 @@ class DemoScope(Scope):
 
     def acquire(self) -> Capture:
         """Return one synthetic multi-channel sine capture."""
-        dt = self._timebase * GRID_NUM / self._n_samples
-        t = np.arange(self._n_samples, dtype=np.float64) * dt
+        window = self._timebase * GRID_NUM
+        n_samples = min(self._max_samples, max(2, round(window / self._dt)))
+        t = np.arange(n_samples, dtype=np.float64) * self._dt
         freq = self._generator.frequency()
         vpp = expected_vpp(self._generator.power, self._impedance) if self._generator.output else 0.0
         rows = []
@@ -487,9 +565,9 @@ class DemoScope(Scope):
             cutoff = DEMO_CUTOFFS.get(ch)
             gain = 1.0 if cutoff is None else 1.0 / math.sqrt(1.0 + (freq / cutoff) ** 2)
             amplitude = 0.5 * vpp * gain
-            noise = self._noise * self._rng.standard_normal(self._n_samples)
+            noise = self._noise * self._rng.standard_normal(n_samples)
             rows.append(amplitude * np.sin(2.0 * np.pi * freq * t) + noise)
-        return Capture(volts=np.vstack(rows), t0=0.0, dt=dt, channel_names=self.channels)
+        return Capture(volts=np.vstack(rows), t0=0.0, dt=self._dt, channel_names=self.channels)
 
     def close(self) -> None:
         """No-op; safe to call repeatedly."""
@@ -555,7 +633,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--cycles",
         type=float,
         default=DEFAULT_CYCLES,
-        help="signal periods to fit across the scope screen at each point",
+        help=(
+            "signal periods to fit across the scope screen at the sweep's "
+            "lowest frequency; the resulting window is fixed and reused for "
+            "every point in the sweep (default: %(default)g)"
+        ),
     )
     parser.add_argument(
         "--settle",
@@ -596,7 +678,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--vdiv-divisor",
         type=float,
         default=6.0,
-        help="vertical scale = expected Vpp / this, leaving headroom (default: 6)",
+        help=(
+            "vertical scale = expected Vpp / this, leaving headroom (default: 6); "
+            "ignored if --vdiv is given"
+        ),
+    )
+    parser.add_argument(
+        "--vdiv",
+        type=float,
+        default=None,
+        metavar="V",
+        help=(
+            "vertical scale in V/div for every channel, set directly instead of "
+            "deriving it from --power/--vdiv-divisor -- use this when the actual "
+            "signal (e.g. radiated, not conducted) is nowhere near the "
+            "commanded source level"
+        ),
     )
     parser.add_argument("--output-csv", default=None, help="write sweep data to this CSV path")
     parser.add_argument("--output-plot", default=None, help="save the plot to this PNG path")
@@ -654,8 +751,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if scope is not None:
             stack.enter_context(scope)
             if not args.demo:
-                vpp = expected_vpp(args.power, impedance)
-                vdiv = max(vpp / args.vdiv_divisor, 1.0e-3)
+                vdiv = resolve_vdiv(args.power, impedance, args.vdiv_divisor, args.vdiv)
                 scope.configure(
                     {
                         "vertical": {

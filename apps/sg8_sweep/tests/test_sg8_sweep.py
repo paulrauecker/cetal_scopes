@@ -85,6 +85,21 @@ def test_expected_vpp_matches_power_formula() -> None:
     assert vpp == pytest.approx(2.0 * np.sqrt(2.0) * np.sqrt(50.0e-3))
 
 
+def test_resolve_vdiv_uses_override_when_given() -> None:
+    assert sg8_sweep.resolve_vdiv(10.0, 50.0, 6.0, 0.005) == pytest.approx(0.005)
+
+
+def test_resolve_vdiv_derives_from_expected_vpp_when_no_override() -> None:
+    # 10 dBm into 50 ohm is exactly 2 Vpp; divisor 6 -> 1/3 V/div.
+    vdiv = sg8_sweep.resolve_vdiv(10.0, 50.0, 6.0, None)
+    assert vdiv == pytest.approx(2.0 / 6.0)
+
+
+def test_resolve_vdiv_floors_at_one_millivolt() -> None:
+    vdiv = sg8_sweep.resolve_vdiv(-80.0, 50.0, 6.0, None)
+    assert vdiv == pytest.approx(1.0e-3)
+
+
 def test_coherent_amplitude_recovers_known_sine() -> None:
     freq = 12.5e6
     dt = 1e-10
@@ -273,6 +288,40 @@ def test_run_sweep_does_not_warn_below_min_amplitude() -> None:
     assert warnings == []
 
 
+def test_run_sweep_sets_timebase_once_from_lowest_frequency() -> None:
+    generator = sg8_sweep.DemoGenerator()
+
+    class TrackingScope(sg8_sweep.DemoScope):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+            self.configure_calls: list[dict[str, object]] = []
+
+        def configure(self, settings: object) -> None:
+            assert isinstance(settings, dict)
+            self.configure_calls.append(dict(settings))
+            super().configure(settings)
+
+    scope = TrackingScope(generator, channels=("C1",), noise=0.0)
+    freqs = sg8_sweep.log_sweep(10e6, 2e9, 5)
+
+    sg8_sweep.run_sweep(
+        generator,
+        scope,
+        channels=("C1",),
+        frequencies=freqs,
+        power_dbm=-10.0,
+        cycles=20.0,
+        settle=0.0,
+        reset_settle=0.0,
+    )
+
+    # Exactly one timebase configuration for the whole sweep, sized for the
+    # lowest swept frequency -- not re-adapted per point.
+    assert len(scope.configure_calls) == 1
+    expected = sg8_sweep.timebase_for_frequency(float(freqs.min()), cycles=20.0)
+    assert scope.configure_calls[0]["timebase"] == pytest.approx(expected)
+
+
 def test_run_sweep_calls_on_point_for_every_frequency() -> None:
     generator = sg8_sweep.DemoGenerator()
     scope = sg8_sweep.DemoScope(generator, channels=("C1",), noise=0.0)
@@ -424,6 +473,12 @@ def test_build_parser_defaults() -> None:
     assert args.demo is False
     assert args.log is True
     assert args.raw_volts is False
+    assert args.vdiv is None
+
+
+def test_build_parser_vdiv_override() -> None:
+    args = sg8_sweep.build_parser().parse_args(["--vdiv", "0.01"])
+    assert args.vdiv == pytest.approx(0.01)
 
 
 def test_build_parser_log_and_raw_volts_toggles() -> None:
