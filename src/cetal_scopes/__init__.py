@@ -6,6 +6,7 @@ from cetal_scopes.channel import Channel
 from cetal_scopes.generators.sg8 import SG8SignalGenerator
 from cetal_scopes.scopes.base import Scope
 from cetal_scopes.scopes.siglent import SiglentSDS6204L
+from cetal_scopes.scopes.spectrum import SpectrumM5i3367
 from cetal_scopes.shot import Shot
 from cetal_scopes.storage import load_capture, save_capture
 
@@ -17,6 +18,7 @@ __all__ = [
     "Scope",
     "Shot",
     "SiglentSDS6204L",
+    "SpectrumM5i3367",
     "TransferFunction",
     "load_capture",
     "save_capture",

@@ -19,23 +19,35 @@ import numpy as np
 from numpy.typing import NDArray
 
 from cetal_scopes.capture import Capture
+from cetal_scopes.scopes._settings import (
+    PHYSICAL_KEYS,
+    normalize_physical,
+    pretrigger_samples,
+)
 from cetal_scopes.scopes.base import Scope
 
 __all__ = [
+    "AcquisitionPlan",
     "SiglentSDS6204L",
+    "VDIV_LADDER",
     "WaveDesc",
     "codes_to_volts",
     "parse_wavedesc",
+    "snap_timebase",
+    "snap_vdiv",
     "time_origin",
 ]
 
 DEFAULT_ADDRESS = "192.168.5.193"
 DEFAULT_PORT = 5025
 GRID_NUM = 10
+#: Vertical grid divisions; the ADC accommodates roughly +/-4.5 div around the
+#: offset, so 8 keeps a margin (see the trigger-clamp note in the apps).
+VGRID_NUM = 8
 
 _WAVEDESC_LENGTH = 346
 _VALID_ANALOG_CHANNELS = ("C1", "C2", "C3", "C4")
-_CONFIG_KEYS = frozenset(
+_PANEL_KEYS = frozenset(
     {
         "channels",
         "timebase",
@@ -47,6 +59,11 @@ _CONFIG_KEYS = frozenset(
         "vertical",
     }
 )
+#: ``configure()`` accepts panel-native keys (SDS6204L SCPI vocabulary) and
+#: the shared physical vocabulary documented on
+#: :class:`~cetal_scopes.scopes.base.Scope`, additively -- every existing
+#: panel key keeps working exactly as before.
+_CONFIG_KEYS = _PANEL_KEYS | PHYSICAL_KEYS
 
 # Timebase enumeration: :WAVeform:PREamble? stores the index, not seconds/div.
 # Empirically verified against an SDS6204L (firmware 18.36.11.2.0.3.7): the
@@ -240,6 +257,93 @@ def time_origin(desc: WaveDesc, grid_num: int = GRID_NUM) -> float:
     return desc.delay - desc.timebase * grid_num / 2.0
 
 
+#: SDS6204L vertical-scale ladder (V/div), 1-2-5 sequence.
+VDIV_LADDER: tuple[float, ...] = (
+    0.0005,
+    0.001,
+    0.002,
+    0.005,
+    0.01,
+    0.02,
+    0.05,
+    0.1,
+    0.2,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+)
+
+
+def snap_vdiv(value: float) -> float:
+    """Snap ``value`` up to the next valid V/div step (clamped to the ends)."""
+    for step in VDIV_LADDER:
+        if step >= value:
+            return step
+    return VDIV_LADDER[-1]
+
+
+def snap_timebase(seconds_per_div: float) -> float:
+    """Snap ``seconds_per_div`` up to the next valid s/div step in :data:`TDIV_ENUM`."""
+    for step in TDIV_ENUM:
+        if step >= seconds_per_div:
+            return step
+    return TDIV_ENUM[-1]
+
+
+# Memory-depth enumeration for ``:ACQuire:MDEPth``. NOT independently
+# hardware-verified: the manual excerpt in docs/scopes/SDS6204L/code.md only
+# gives these as *example* values for the command's syntax, not a complete,
+# channel-count-aware table. Confirm the full ladder against a real SDS6204L
+# before relying on exact depth selection for a demanding acquisition.
+MDEPTH_ENUM: tuple[tuple[int, str], ...] = (
+    (10_000, "10k"),
+    (1_000_000, "1M"),
+    (10_000_000, "10M"),
+    (100_000_000, "100M"),
+    (250_000_000, "250M"),
+    (1_000_000_000, "1G"),
+)
+
+
+def snap_mdepth(samples: int) -> str:
+    """Snap a sample count up to the next :data:`MDEPTH_ENUM` step (clamped to the ends)."""
+    for value, label in MDEPTH_ENUM:
+        if value >= samples:
+            return label
+    return MDEPTH_ENUM[-1][1]
+
+
+def _impedance_ohms_to_string(ohms: float) -> str:
+    """Convert the physical-vocabulary ``impedance`` (ohms) to the SCPI alias."""
+    if float(ohms) == 50.0:
+        return "FIFTy"
+    if float(ohms) == 1_000_000.0:
+        return "ONEMeg"
+    raise ValueError(
+        f"unsupported impedance {ohms!r} ohm; expected 50 or 1000000 (1 Mohm)"
+    )
+
+
+@dataclass(frozen=True)
+class AcquisitionPlan:
+    """What :meth:`SiglentSDS6204L.set_acquisition` actually requested.
+
+    ``sample_rate``/``record_length`` are honored via ``timebase`` (s/div)
+    and ``memory_depth``; the scope's own readback (:class:`WaveDesc`, at
+    acquire time) is the source of truth for what was actually achieved --
+    both are rounded to the nearest achievable step, and sample rate in
+    particular is not directly settable on this instrument.
+    """
+
+    requested_sample_rate: float | None
+    requested_record_length: int | None
+    timebase: float
+    memory_depth: str
+    delay: float
+
+
 def _normalize_channel(channel: str) -> str:
     name = channel.strip().upper()
     if name.startswith("CH"):
@@ -295,6 +399,57 @@ def _normalize_impedance(value: str) -> str:
     raise ValueError(
         f"unsupported impedance {value!r}; expected 'ONEMeg'/'1M' or 'FIFTy'/'50'"
     )
+
+
+_TOP_TO_VERTICAL_KEY = {
+    "range": "scale",
+    "offset": "offset",
+    "coupling": "coupling",
+    "impedance": "impedance",
+}
+
+
+def _check_physical_panel_conflicts(
+    settings: Mapping[str, Any], channels: Sequence[str]
+) -> None:
+    """Reject a ``configure()`` call that mixes a physical key with its panel alias.
+
+    Both spellings write the same instrument setting, so there is no honest
+    precedence rule between them -- see the collision-rule discussion in
+    :mod:`cetal_scopes.scopes._settings`.
+    """
+    if ("sample_rate" in settings or "record_length" in settings) and (
+        "timebase" in settings or "memory_depth" in settings
+    ):
+        raise ValueError(
+            "cannot mix physical keys ('sample_rate'/'record_length') with "
+            "panel keys ('timebase'/'memory_depth') in one configure() call"
+        )
+    if "pretrigger" in settings and "delay" in settings:
+        raise ValueError(
+            "cannot mix physical 'pretrigger' with panel 'delay' in one "
+            "configure() call"
+        )
+
+    vertical = settings.get("vertical")
+    if not isinstance(vertical, Mapping):
+        return
+    for physical_key, vertical_key in _TOP_TO_VERTICAL_KEY.items():
+        if physical_key not in settings:
+            continue
+        value = settings[physical_key]
+        touched = set(value) if isinstance(value, Mapping) else set(channels)
+        for channel, params in vertical.items():
+            if (
+                channel in touched
+                and isinstance(params, Mapping)
+                and vertical_key in params
+            ):
+                raise ValueError(
+                    f"cannot mix physical {physical_key!r} with panel "
+                    f"'vertical[{channel!r}][{vertical_key!r}]' for the same "
+                    f"channel in one configure() call"
+                )
 
 
 class _Transport(Protocol):
@@ -552,6 +707,13 @@ class SiglentSDS6204L(Scope):
         self._owns_transport = transport is None
         self._connected = False
         self._idn = ""
+        self._last_sample_rate: float | None = None
+        self._last_window_s: float | None = None
+        self._last_record_length: int | None = None
+        self._last_timebase: float | None = None
+        self._last_memory_depth: str | None = None
+        self._last_delay: float = 0.0
+        self._last_acquisition_plan: AcquisitionPlan | None = None
 
     @property
     def idn(self) -> str:
@@ -582,6 +744,11 @@ class SiglentSDS6204L(Scope):
         """Whether :meth:`acquire` leaves the scope running between fetches."""
         return self._streaming
 
+    @property
+    def last_acquisition(self) -> AcquisitionPlan | None:
+        """The most recent :meth:`set_acquisition` result, or ``None`` if never called."""
+        return self._last_acquisition_plan
+
     def connect(self) -> None:
         """Open the socket and identify the instrument."""
         if self._connected:
@@ -608,11 +775,19 @@ class SiglentSDS6204L(Scope):
     def configure(self, settings: Mapping[str, Any]) -> None:
         """Apply acquisition settings.
 
-        Supported keys: ``channels``, ``timebase``, ``delay``,
-        ``acquire_type``, ``memory_depth``, ``trigger`` (mapping with
-        ``source``/``level``/``slope``) and ``vertical`` (mapping of channel
-        name to ``scale``/``offset``/``coupling``/``probe``/
-        ``bandwidth_limit``/``impedance``).
+        Accepts this driver's panel-native keys -- ``channels``,
+        ``timebase``, ``delay``, ``acquire_type``, ``memory_depth``,
+        ``trigger`` (mapping with ``source``/``level``/``slope``), and
+        ``vertical`` (mapping of channel name to
+        ``scale``/``offset``/``coupling``/``probe``/``bandwidth_limit``/
+        ``impedance``) -- additively alongside the shared physical
+        vocabulary documented on :class:`~cetal_scopes.scopes.base.Scope`
+        (``sample_rate``, ``record_length``, ``pretrigger``, ``range``,
+        ``offset``, ``coupling``, ``impedance``; ``channels`` and
+        ``trigger`` are identical in both vocabularies). Mixing a physical
+        key with the panel key it aliases in one call (e.g. ``sample_rate``
+        with ``timebase``, or ``range`` with ``vertical[ch]["scale"]`` for
+        the same channel) raises :class:`ValueError`.
         """
         unknown = set(settings) - _CONFIG_KEYS
         if unknown:
@@ -623,6 +798,10 @@ class SiglentSDS6204L(Scope):
 
         if "channels" in settings:
             self._channels = _normalize_channels(settings["channels"])
+
+        _check_physical_panel_conflicts(settings, self._channels)
+        physical = normalize_physical(settings, channels=self._channels)
+
         if "timebase" in settings or "delay" in settings:
             self.set_timebase(
                 scale=settings.get("timebase"), delay=settings.get("delay")
@@ -660,6 +839,130 @@ class SiglentSDS6204L(Scope):
                     bandwidth_limit=params.get("bandwidth_limit"),
                     impedance=params.get("impedance"),
                 )
+
+        if (
+            physical.sample_rate is not None
+            or physical.record_length is not None
+            or physical.pretrigger is not None
+        ):
+            self.set_acquisition(
+                sample_rate=physical.sample_rate,
+                record_length=physical.record_length,
+                pretrigger=physical.pretrigger,
+            )
+
+        if physical.range or physical.offset or physical.coupling or physical.impedance:
+            touched: set[str] = set()
+            for mapping in (
+                physical.range,
+                physical.offset,
+                physical.coupling,
+                physical.impedance,
+            ):
+                if mapping:
+                    touched |= set(mapping)
+            for channel in touched:
+                self.set_channel(
+                    channel,
+                    scale=(
+                        snap_vdiv(physical.range[channel] / (VGRID_NUM / 2))
+                        if physical.range and channel in physical.range
+                        else None
+                    ),
+                    offset=(physical.offset.get(channel) if physical.offset else None),
+                    coupling=(
+                        physical.coupling.get(channel) if physical.coupling else None
+                    ),
+                    impedance=(
+                        _impedance_ohms_to_string(physical.impedance[channel])
+                        if physical.impedance and channel in physical.impedance
+                        else None
+                    ),
+                )
+
+    def set_acquisition(
+        self,
+        *,
+        sample_rate: float | None = None,
+        record_length: int | None = None,
+        pretrigger: int | float | None = None,
+    ) -> AcquisitionPlan:
+        """Configure sample rate, record length, and/or pretrigger.
+
+        Honored via ``timebase`` (s/div) and ``memory_depth``: together they
+        determine the acquisition window (``record_length / sample_rate``)
+        that both are derived from. ``sample_rate`` and ``record_length``
+        must both be known to compute it -- give the one that is changing
+        and the other is reused from the last :meth:`set_acquisition` call
+        (an error if neither call ever set it).
+
+        ``pretrigger`` alone is valid once a window has already been
+        established (by this call or an earlier one); it is a sample count
+        (``int``) or a fraction of the record (``float`` in ``[0, 1]``).
+
+        Returns
+        -------
+        AcquisitionPlan
+            The requested values alongside what was actually written. The
+            scope's own readback (:class:`WaveDesc`, at :meth:`acquire`
+            time) remains the source of truth for what was actually
+            achieved -- sample rate in particular is not directly settable.
+        """
+        if sample_rate is None and record_length is None and pretrigger is None:
+            raise ValueError(
+                "at least one of sample_rate, record_length, or pretrigger is required"
+            )
+
+        if sample_rate is not None or record_length is not None:
+            effective_rate = (
+                sample_rate if sample_rate is not None else self._last_sample_rate
+            )
+            effective_length = (
+                record_length if record_length is not None else self._last_record_length
+            )
+            if effective_rate is None or effective_length is None:
+                raise ValueError(
+                    "sample_rate and record_length must both be known: give "
+                    "the missing one now, or set both together in an "
+                    "earlier set_acquisition call, since the achievable "
+                    "timebase depends on both"
+                )
+            window_s = effective_length / effective_rate
+            tdiv = snap_timebase(window_s / self._grid_num)
+            window_s = tdiv * self._grid_num
+            depth_label = snap_mdepth(round(effective_rate * window_s))
+            self.set_timebase(scale=tdiv)
+            self.set_memory_depth(depth_label)
+            self._last_sample_rate = effective_rate
+            self._last_record_length = effective_length
+            self._last_window_s = window_s
+            self._last_timebase = tdiv
+            self._last_memory_depth = depth_label
+
+        if pretrigger is not None:
+            if self._last_window_s is None or self._last_record_length is None:
+                raise ValueError(
+                    "pretrigger requires sample_rate and record_length to "
+                    "have been set first (in this call or an earlier one)"
+                )
+            pretrig_samples = pretrigger_samples(pretrigger, self._last_record_length)
+            fraction = pretrig_samples / self._last_record_length
+            delay = self._last_window_s * (0.5 - fraction)
+            self.set_timebase(delay=delay)
+            self._last_delay = delay
+
+        if self._last_timebase is None or self._last_memory_depth is None:
+            raise RuntimeError(  # pragma: no cover - unreachable, see guards above
+                "internal: set_acquisition completed without a resolved timebase"
+            )
+        self._last_acquisition_plan = AcquisitionPlan(
+            requested_sample_rate=sample_rate,
+            requested_record_length=record_length,
+            timebase=self._last_timebase,
+            memory_depth=self._last_memory_depth,
+            delay=self._last_delay,
+        )
+        return self._last_acquisition_plan
 
     def set_channel(
         self,

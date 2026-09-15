@@ -9,8 +9,12 @@ import pytest
 
 from cetal_scopes import Capture, SiglentSDS6204L
 from cetal_scopes.scopes.siglent import (
+    MDEPTH_ENUM,
+    TDIV_ENUM,
+    AcquisitionPlan,
     WaveDesc,
     _host_from_address,
+    _impedance_ohms_to_string,
     _make_transport,
     _port_from_address,
     _SocketTransport,
@@ -18,6 +22,9 @@ from cetal_scopes.scopes.siglent import (
     _VisaTransport,
     codes_to_volts,
     parse_wavedesc,
+    snap_mdepth,
+    snap_timebase,
+    snap_vdiv,
     time_origin,
 )
 
@@ -610,3 +617,188 @@ def test_socket_transport_roundtrip() -> None:
     transport.write(":TRIGger:RUN")
     transport.close()
     thread.join(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Physical-vocabulary additive layer
+# ---------------------------------------------------------------------------
+
+
+class TestSnapVdiv:
+    def test_rounds_up_the_ladder(self) -> None:
+        assert snap_vdiv(0.0001) == 0.0005
+        assert snap_vdiv(0.03) == 0.05
+        assert snap_vdiv(1.5) == 2.0
+        assert snap_vdiv(100.0) == 10.0
+
+
+class TestSnapTimebase:
+    def test_exact_step_passes_through(self) -> None:
+        assert snap_timebase(1e-3) == pytest.approx(1e-3)
+
+    def test_rounds_up_to_next_step(self) -> None:
+        assert snap_timebase(1.5e-3) == pytest.approx(2e-3)
+
+    def test_clamps_above_the_top(self) -> None:
+        assert snap_timebase(1e6) == TDIV_ENUM[-1]
+
+
+class TestSnapMdepth:
+    def test_exact_step_passes_through(self) -> None:
+        assert snap_mdepth(10_000) == "10k"
+
+    def test_rounds_up_to_next_step(self) -> None:
+        assert snap_mdepth(10_001) == "1M"
+
+    def test_clamps_above_the_top(self) -> None:
+        assert snap_mdepth(10**12) == MDEPTH_ENUM[-1][1]
+
+
+class TestImpedanceOhmsToString:
+    def test_known_values(self) -> None:
+        assert _impedance_ohms_to_string(50) == "FIFTy"
+        assert _impedance_ohms_to_string(1_000_000) == "ONEMeg"
+
+    def test_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValueError, match="unsupported impedance"):
+            _impedance_ohms_to_string(75)
+
+
+def test_set_acquisition_writes_timebase_and_memory_depth() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+
+    plan = scope.set_acquisition(sample_rate=1e6, record_length=10_000)
+
+    assert ":TIMebase:SCALe 0.001" in fake.written
+    assert ":ACQuire:MDEPth 10k" in fake.written
+    assert plan == AcquisitionPlan(
+        requested_sample_rate=1e6,
+        requested_record_length=10_000,
+        timebase=pytest.approx(1e-3),
+        memory_depth="10k",
+        delay=0.0,
+    )
+    assert scope.last_acquisition == plan
+
+
+def test_set_acquisition_requires_both_together_on_first_call() -> None:
+    scope, _fake = make_driver(("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="must both be known"):
+        scope.set_acquisition(sample_rate=1e6)
+    with pytest.raises(ValueError, match="must both be known"):
+        scope.set_acquisition(record_length=1000)
+
+
+def test_set_acquisition_reuses_the_other_value_on_a_later_call() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.set_acquisition(sample_rate=1e6, record_length=10_000)
+    fake.written.clear()
+
+    plan = scope.set_acquisition(record_length=20_000)
+
+    assert plan.requested_sample_rate is None
+    assert plan.requested_record_length == 20_000
+    assert ":ACQuire:MDEPth 1M" in fake.written  # 1e6 Hz * 0.02 s = 20_000 samples
+
+
+def test_set_acquisition_pretrigger_requires_a_prior_window() -> None:
+    scope, _fake = make_driver(("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="requires sample_rate and record_length"):
+        scope.set_acquisition(pretrigger=0.5)
+
+
+def test_set_acquisition_pretrigger_centered_gives_zero_delay() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.set_acquisition(sample_rate=1e6, record_length=10_000)
+    fake.written.clear()
+
+    scope.set_acquisition(pretrigger=0.5)
+
+    assert ":TIMebase:DELay 0" in fake.written
+
+
+def test_set_acquisition_pretrigger_fraction_computes_delay() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.set_acquisition(sample_rate=1e6, record_length=10_000)  # window = 0.01 s
+    fake.written.clear()
+
+    scope.set_acquisition(pretrigger=0.25)  # 2500 samples pretrigger
+
+    assert ":TIMebase:DELay 0.0025" in fake.written
+
+
+def test_configure_physical_sample_rate_and_record_length() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.configure({"sample_rate": 1e6, "record_length": 10_000})
+    assert ":TIMebase:SCALe 0.001" in fake.written
+    assert ":ACQuire:MDEPth 10k" in fake.written
+
+
+def test_configure_rejects_mixing_sample_rate_with_timebase() -> None:
+    scope, _fake = make_driver(("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="cannot mix"):
+        scope.configure({"sample_rate": 1e6, "timebase": 1e-3})
+
+
+def test_configure_rejects_mixing_pretrigger_with_delay() -> None:
+    scope, _fake = make_driver(("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="cannot mix"):
+        scope.configure({"pretrigger": 0.5, "delay": 1e-6})
+
+
+def test_configure_rejects_mixing_range_with_vertical_scale_same_channel() -> None:
+    scope, _fake = make_driver(("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="cannot mix"):
+        scope.configure({"range": 1.0, "vertical": {"C1": {"scale": 0.5}}})
+
+
+def test_configure_range_and_vertical_scale_different_channels_is_fine() -> None:
+    scope, fake = make_driver(("C1", "C2"))
+    scope.connect()
+    scope.configure({"range": {"C1": 1.0}, "vertical": {"C2": {"scale": 0.2}}})
+    assert ":CHANnel1:SCALe 0.5" in fake.written  # snap_vdiv(1.0 / 4) == 0.5
+    assert ":CHANnel2:SCALe 0.2" in fake.written
+
+
+def test_configure_range_maps_to_scale() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.configure({"range": 1.0})
+    assert ":CHANnel1:SCALe 0.5" in fake.written
+
+
+def test_configure_offset_top_level_passthrough() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.configure({"offset": 0.05})
+    assert ":CHANnel1:OFFSet 0.05" in fake.written
+
+
+def test_configure_coupling_top_level_passthrough() -> None:
+    scope, fake = make_driver(("C1",))
+    scope.connect()
+    scope.configure({"coupling": "AC"})
+    assert ":CHANnel1:COUPling AC" in fake.written
+
+
+def test_configure_impedance_top_level_converts_ohms() -> None:
+    scope, fake = make_driver(("C1", "C2"))
+    scope.connect()
+    scope.configure({"impedance": {"C1": 50, "C2": 1_000_000}})
+    assert ":CHANnel1:IMPedance FIFTy" in fake.written
+    assert ":CHANnel2:IMPedance ONEMeg" in fake.written
+
+
+def test_last_acquisition_is_none_before_any_call() -> None:
+    scope, _fake = make_driver(("C1",))
+    assert scope.last_acquisition is None

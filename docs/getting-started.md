@@ -119,6 +119,6 @@ pass `outside="zero"` or `"clamp"` to band-limit instead.
 
 *(list vendors/models as parsers are implemented)*
 
-- [ ] Spectrum M5i.3367
-- [ ] Siglent SDS6204L 
+- [x] Spectrum M5i.3367
+- [x] Siglent SDS6204L
 - [ ] Tektronix (TBD)

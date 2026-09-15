@@ -90,6 +90,7 @@ dependencies = [
     { name = "pyvisa" },
     { name = "pyvisa-py" },
     { name = "scipy" },
+    { name = "spcm" },
 ]
 
 [package.dev-dependencies]
@@ -112,6 +113,7 @@ requires-dist = [
     { name = "pyvisa", specifier = ">=1.16.2" },
     { name = "pyvisa-py", specifier = ">=0.8.1" },
     { name = "scipy", specifier = ">=1.18.1" },
+    { name = "spcm", specifier = ">=1.13.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -498,6 +500,30 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/26/00/35d85dcce6c57fdc871f3867d465d780f302a175ea360f62533f12b27e2b/flask-3.1.3.tar.gz", hash = "sha256:0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb", size = 759004, upload-time = "2026-02-19T05:00:57.678Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl", hash = "sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c", size = 103424, upload-time = "2026-02-19T05:00:56.027Z" },
+]
+
+[[package]]
+name = "flexcache"
+version = "0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/b0/8a21e330561c65653d010ef112bf38f60890051d244ede197ddaa08e50c1/flexcache-0.3.tar.gz", hash = "sha256:18743bd5a0621bfe2cf8d519e4c3bfdf57a269c15d1ced3fb4b64e0ff4600656", size = 15816, upload-time = "2024-03-09T03:21:07.555Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/cd/c883e1a7c447479d6e13985565080e3fea88ab5a107c21684c813dba1875/flexcache-0.3-py3-none-any.whl", hash = "sha256:d43c9fea82336af6e0115e308d9d33a185390b8346a017564611f1466dcd2e32", size = 13263, upload-time = "2024-03-09T03:21:05.635Z" },
+]
+
+[[package]]
+name = "flexparser"
+version = "0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/82/99/b4de7e39e8eaf8207ba1a8fa2241dd98b2ba72ae6e16960d8351736d8702/flexparser-0.4.tar.gz", hash = "sha256:266d98905595be2ccc5da964fe0a2c3526fbbffdc45b65b3146d75db992ef6b2", size = 31799, upload-time = "2024-11-07T02:00:56.249Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/5e/3be305568fe5f34448807976dc82fc151d76c3e0e03958f34770286278c1/flexparser-0.4-py3-none-any.whl", hash = "sha256:3738b456192dcb3e15620f324c447721023c0293f6af9955b481e91d00179846", size = 27625, upload-time = "2024-11-07T02:00:54.523Z" },
 ]
 
 [[package]]
@@ -1201,6 +1227,21 @@ wheels = [
 ]
 
 [[package]]
+name = "pint"
+version = "0.26.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flexcache" },
+    { name = "flexparser" },
+    { name = "platformdirs" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/bc/2c38c32e0fb1f966d3695f4493a3f3ce2cc0cca1bbe7c958b92261b31af9/pint-0.26.1.tar.gz", hash = "sha256:1bbde36eae57a5a289cd05081c6405618a5899814940752064ce351cd0204f71", size = 273631, upload-time = "2026-09-10T21:16:49.712Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/5c/9507ea3c732f8a259f45ddf190a741e9bf7d3fe229b5d473917ee6efbf1e/pint-0.26.1-py3-none-any.whl", hash = "sha256:e982b129415c09c63308f314ae44697d83e5c96f253bcc0d5b833fc3329eb6d4", size = 326478, upload-time = "2026-09-10T21:16:48.316Z" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.11.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1635,6 +1676,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "spcm"
+version = "1.13.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pint" },
+    { name = "spcm-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f9/85/8002464fd2725025135e260b0e6fcc0619630c14d4f9ed435ea2db56ff15/spcm-1.13.4.tar.gz", hash = "sha256:0e356676823bcaa270268838e2322019ac935e61f550ec0dc6cbd912832aab92", size = 92061, upload-time = "2026-08-20T08:22:37.099Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/5d/4d0e31c173541f8e35d850402625ded5e0e502e1d8f9b6add00728796f93/spcm-1.13.4-py3-none-any.whl", hash = "sha256:ea2d4c4e485cf5bc5ce7bad35a628229f416d066c7d763915d07cae5608ad7e3", size = 86645, upload-time = "2026-08-20T08:22:35.571Z" },
+]
+
+[[package]]
+name = "spcm-core"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/ec/55041f1ea5cb598a2106d7e2f1664961baa84941d3ee7f78ea657df80ba2/spcm_core-1.0.9.tar.gz", hash = "sha256:ceec88007a89ab62b039c944bb4bd6f7d2ee23d36030bc2f704c1db2e50dfbf1", size = 51625, upload-time = "2026-05-18T12:39:25.704Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/fc/016e399a13b6f4e3bf1ead7309462b16571f46432586b245071ceafec782/spcm_core-1.0.9-py3-none-any.whl", hash = "sha256:42559a62e25e70ba84c090c28d3505266d0880f220016e43d895e32dc8153ef2", size = 36845, upload-time = "2026-05-18T12:39:24.574Z" },
 ]
 
 [[package]]

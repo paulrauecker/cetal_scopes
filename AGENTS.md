@@ -6,10 +6,19 @@ Early scaffold. `Capture`, `Channel`, `Antenna` (with a frequency-dependent
 `TransferFunction`) live in `src/cetal_scopes/{capture,channel,antenna}.py` and
 are exported from `__init__.py`; the pydantic `CaptureFile` schema is in
 `metadata.py` and `load_capture` / `save_capture` in `storage.py`. The `Scope`
-driver template lives in `src/cetal_scopes/scopes/base.py`. The Siglent SDS6204L
-driver (`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket LAN
+driver template lives in `src/cetal_scopes/scopes/base.py`, and also documents
+the shared physical (SI-unit) `configure()` vocabulary that every driver
+accepts alongside its own panel-native keys (see
+`src/cetal_scopes/scopes/_settings.py`). The Siglent SDS6204L driver
+(`src/cetal_scopes/scopes/siglent.py`) works over the raw-socket LAN
 interface with a lazy PyVISA fallback for USB/VXI-11, and has been validated
-against an SDS6204L over LAN (single-channel capture). A downstream
+against an SDS6204L over LAN (single-channel capture). The Spectrum
+M5i.3367-x16 driver (`src/cetal_scopes/scopes/spectrum.py`,
+`SpectrumM5i3367`) drives the card's registers directly over `spcm_core`
+(lazily imported) and has been validated against real hardware: connect/
+identify, single- and multi-channel Standard Single acquisition, channel
+trigger configuration, and 4-segment Multiple Recording via
+`acquire_segments()`. A downstream
 `cetal_scopes.analysis` subpackage (time / spectral / analytic / metrics plus
 result classes) and `cetal_scopes.plotting` are implemented. Downstream
 applications live in `apps/` (a real-time signal/FFT viewer, a Tk B-dot probe
@@ -39,7 +48,13 @@ Read `docs/architecture.md` before changing the data model. In short:
 - On disk: `<stem>.json` + `<stem>.volts.npy` + `<stem>.raw.npy`.
 - Vendor SDKs (`spcm`, `spcm-core`, `pyvisa`, `pyvisa-py`) are hard deps but
   imported lazily inside `scopes/` so core import and CI need no hardware.
-- `pyspcm` is not on PyPI; use `spcm` / `spcm_core` instead.
+- `pyspcm` is not on PyPI; use `spcm` / `spcm_core` instead. The M5i driver
+  uses `spcm_core` (low-level, plain floats) rather than the high-level
+  `spcm` package (which returns `pint.Quantity` values, out of step with
+  this codebase's plain-float `Capture`/`Channel` containers).
+- The vendor driver (`libspcm_linux.so`) has no `SONAME` and is loaded by
+  bare name, so it must be on `LD_LIBRARY_PATH`; `flake.nix` handles this for
+  the Nix devShell -- see its comments before changing that logic.
 - Siglent gotcha: `:SYSTem:SELFCal` is **asynchronous and slow** (minutes; the
   front panel shows "doing self cal ... NN%"). There is **no reliable SCPI
   progress or completion signal**: it returns immediately, `*OPC?` is `1` at

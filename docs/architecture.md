@@ -109,8 +109,28 @@ The template `Scope` class is an ABC with:
 - context-manager support (`__enter__` / `__exit__`).
 
 The first concrete driver is **Siglent SDS6204L** (SCPI; raw socket port 5025
-first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
-`spcm` / `spcm_core`.
+first, VISA fallback). The second is **Spectrum M5i.3367-x16**
+(`SpectrumM5i3367`), a register-based card driven directly over `spcm_core`
+(the vendor's low-level `ctypes` bindings) rather than the high-level `spcm`
+package, since the latter returns `pint.Quantity` values and this codebase's
+`Capture`/`Channel` containers are plain-float SI-unit, not pint-aware.
+
+In addition to each driver's own panel-native `configure()` keys (e.g.
+Siglent's `timebase` in s/div), every driver also accepts a shared, physical,
+SI-unit vocabulary (`sample_rate`, `record_length`, `pretrigger`, `range`,
+`offset`, `coupling`, `impedance`, `trigger`), documented in full on the
+`Scope` class docstring and implemented in
+`cetal_scopes.scopes._settings`. The M5i implements it natively; the Siglent
+driver accepts it additively, alongside (and interoperating with) its
+existing panel keys -- mixing a physical key with the panel key it aliases in
+one `configure()` call (e.g. `sample_rate` with `timebase`) raises
+`ValueError`, since both spellings write the same instrument setting and
+there is no honest way to prefer one.
+
+The M5i also exposes `acquire_segments() -> list[Capture]` for Multiple
+Recording (hardware-segmented acquisition, one `Capture` per segment); plain
+`acquire()` covers Standard Single and raises if the card is configured for
+segments.
 
 ## Dependencies
 
@@ -121,10 +141,17 @@ first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
 - `pyvisa` + `pyvisa-py` are declared and used by the Siglent driver's VISA
   fallback (USB / VXI-11); the raw-socket LAN path needs only the stdlib.
   `pyvisa` is imported lazily inside `_VisaTransport.open()`.
-- `spcm` / `spcm-core` are still to be added for the Spectrum driver.
-- `pyspcm` is **not** on PyPI and cannot be a pip dependency. The pip-installable
-  low-level API is `spcm-core` (import `spcm_core`); the high-level API is
-  `spcm` (which depends on `spcm-core`). Use these instead of `pyspcm`.
+- `spcm` (which pulls in `spcm-core`) is declared for the Spectrum driver;
+  `spcm_core` is imported lazily inside `_RealCard`'s methods in
+  `scopes/spectrum.py`. `pyspcm` is **not** on PyPI and cannot be a pip
+  dependency -- `spcm_core` is the pip-installable equivalent.
+- The vendor driver library (`libspcm_linux.so`) has no `SONAME` and is
+  loaded by bare name with no path override, so it must be on the linker
+  search path. `flake.nix` handles this for the Nix devShell (see its
+  comments for a real footgun found along the way: putting the *whole*
+  system library directory on `LD_LIBRARY_PATH` also shadows Nix's
+  `libpython`, breaking `ctypes` itself -- only a narrow directory
+  containing just that one library is safe).
 
 ## Milestones
 
@@ -134,12 +161,15 @@ first, VISA fallback). The second is **Spectrum M5i.3367-x16**, built on
    the cross-correlation estimator in `cetal_scopes.analysis`.)*
 2. **Siglent SDS6204L driver** producing a `Capture`. *(LAN raw socket + VISA
    fallback done; verify against hardware.)*
-3. **Spectrum M5i.3367-x16 driver** over `spcm` / `spcm_core`.
+3. **Spectrum M5i.3367-x16 driver** over `spcm_core`. *(Done: Standard Single
+   and Multiple Recording, hardware-verified including trigger configuration
+   and the sample-rate readback path. FIFO streaming deferred, see below.)*
 4. Documentation finalization.
 
 ## Deliberately deferred
 
 - Clock/external synchronization across scopes.
-- Streaming / multi-shot acquisition.
+- FIFO streaming acquisition (continuous, longer than on-board memory).
+  Multiple Recording (segmented, one `Capture` per trigger) is implemented.
 - `Shot` serialization.
-- Unequal-length or segmented channels.
+- Unequal-length or segmented channels within a single `Capture`.

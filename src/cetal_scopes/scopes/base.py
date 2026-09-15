@@ -28,6 +28,30 @@ class Scope(ABC):
     :meth:`close`, even when the body raises. Vendor SDKs must be imported
     lazily inside subclasses so that importing :mod:`cetal_scopes` never
     requires vendor libraries or hardware.
+
+    In addition to a driver's own panel-native keys (e.g. Siglent's
+    ``timebase`` in s/div), every driver also accepts a shared, physical,
+    SI-unit vocabulary in :meth:`configure`, so that application code can
+    drive any instrument without knowing its front panel (see
+    :mod:`cetal_scopes.scopes._settings`):
+
+    - ``sample_rate`` -- Hz
+    - ``record_length`` -- samples
+    - ``pretrigger`` -- samples (``int``) or a fraction of the record
+      (``float`` in ``[0, 1]``)
+    - ``channels`` -- sequence of channel names
+    - ``range`` -- volts full-scale (the channel spans ``+/-range``)
+    - ``offset`` -- volts
+    - ``coupling`` -- e.g. ``"DC"``, ``"AC"``
+    - ``impedance`` -- ohms
+    - ``trigger`` -- mapping with ``source``, ``level`` (volts), ``slope``
+
+    ``range``, ``offset``, ``coupling``, and ``impedance`` each accept either
+    a single value (applied to every channel) or a mapping from channel name
+    to value. A driver whose hardware fixes one of these (e.g. the M5i's
+    coupling and impedance) accepts the value that matches as a no-op and
+    raises :class:`ValueError` for any other value, so shared application
+    code can set it on any driver without special-casing the instrument.
     """
 
     @abstractmethod
