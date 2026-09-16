@@ -213,3 +213,53 @@ def test_align_shot_handles_captures_at_different_sample_rates() -> None:
 
     offsets = align_shot(shot)
     assert offsets["slow"].offset == pytest.approx(3.5e-9, abs=2e-9)
+
+
+def test_align_shot_accounts_for_differing_time_origins() -> None:
+    # estimate_time_offset correlates by index and ignores t0, so a shot whose
+    # captures have different pretriggers is mis-aligned by exactly that
+    # difference unless align_shot adds it back. Two instruments set up with
+    # different pretriggers is the normal case, not an exotic one.
+    dt = 1e-9
+    n = 2000
+    local = (np.arange(n, dtype=np.float64) - 1000) * dt
+    pulse = np.exp(-0.5 * (local / 2e-8) ** 2)
+
+    shot = Shot()
+    shot.add("a", Capture(volts=pulse[None, :], t0=-1000 * dt, dt=dt))
+    # Same event, but this instrument kept a much longer pretrigger, so its
+    # t0 is 500 ns earlier and its record is shifted in the array by 500.
+    shifted = np.roll(pulse, 500)
+    shot.add("b", Capture(volts=shifted[None, :], t0=-1500 * dt, dt=dt))
+
+    offsets = align_shot(shot)
+    assert offsets["b"].offset == pytest.approx(0.0, abs=1e-9)
+
+    reference = shot.aligned_channel("a", "CH1")
+    aligned = shot.aligned_channel("b", "CH1")
+    peak_ref = reference.time[int(np.argmax(reference.volts))]
+    peak_other = aligned.time[int(np.argmax(aligned.volts))]
+    assert peak_other == pytest.approx(peak_ref, abs=1e-9)
+
+
+def test_align_shot_searches_far_enough_for_mismatched_pretriggers() -> None:
+    # The default search is half the shorter record. When two instruments hold
+    # the event at very different positions -- different pretriggers, or very
+    # different sample rates at the same record length -- the true lag falls
+    # outside that window and the fit locks onto noise. align_shot widens the
+    # search by the difference in recorded origins.
+    dt = 1e-9
+    n = 4000
+    local = (np.arange(n, dtype=np.float64) - 400) * dt
+    pulse = np.exp(-0.5 * (local / 2e-8) ** 2)
+
+    shot = Shot()
+    shot.add("early", Capture(volts=pulse[None, :], t0=-400 * dt, dt=dt))
+    # The same event, but held 3400 samples in -- far beyond half the record.
+    late = np.roll(pulse, 3000)
+    shot.add("late", Capture(volts=late[None, :], t0=-3400 * dt, dt=dt))
+
+    offsets = align_shot(shot)
+
+    assert offsets["late"].correlation > 0.9
+    assert offsets["late"].offset == pytest.approx(0.0, abs=1e-9)

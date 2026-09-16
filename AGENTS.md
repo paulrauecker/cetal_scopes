@@ -24,9 +24,19 @@ result classes) and `cetal_scopes.plotting` are implemented. Downstream
 applications live in `apps/` (a real-time signal/FFT viewer, a Tk B-dot probe
 viewer, and a Dash/Plotly B-dot web app); they are not part of the library. The
 web app is a uv workspace member (`apps/bdot_web`) with its own `dash`/`plotly`
-dependencies. `Shot` groups captures with per-capture time offsets
-and is in-memory only; `analysis.fields` turns a calibrated B-dot's volts into
-`dB/dt` and `B`, and `analysis.alignment` measures inter-capture offsets. Treat
+dependencies. `Shot` groups captures with per-capture time offsets and is persisted by
+`save_shot` / `load_shot` as a directory of captures plus a `shot.json` index.
+`analysis.fields` turns a calibrated B-dot's volts into `dB/dt` and `B`, and
+`analysis.alignment` measures inter-capture offsets (`estimate_time_offset`
+pairwise, `align_shot` across a whole shot).
+
+Every driver also exposes a staged `arm()` / `wait()` / `fetch()` lifecycle
+alongside `acquire()`, so several instruments can be armed before any is
+triggered; `cetal_scopes.acquisition` (`MultiScopeAcquisition`) drives N of them
+through one shot behind an arm barrier, and `apps/capture_studio` is the
+FastAPI + Plotly.js front end for it. `scopes.registry` maps driver names to
+classes and `scopes.demo.DemoScope` is a synthetic instrument implementing the
+full staged lifecycle, so the whole stack runs with no hardware. Treat
 docs and docstrings as design intent, not current behavior — verify against
 source before relying on them.
 
@@ -40,8 +50,8 @@ Read `docs/architecture.md` before changing the data model. In short:
   `channels: dict[str, Channel]`.
 - `Channel` is a row-view of the Capture arrays plus an `Antenna` (persisted
   inline); `time` is derived (`t0 + arange(n) * dt`), never stored.
-- `Shot` groups `Capture`s in memory with per-capture time offsets; it is not
-  persisted.
+- `Shot` groups `Capture`s with per-capture time offsets; `save_shot` /
+  `load_shot` persist it as `<shot>/shot.json` plus one capture per instrument.
 - `cetal_scopes.analysis` (`time`, `spectral`, `analytic`, `metrics`, `fields`,
   `alignment`, `results`) operates on `Channel`s and returns
   `Spectrum`/`ChannelStats`/`TimeOffset`; it never mutates captures. `cetal_scopes.plotting` draws captures and spectra with matplotlib.
@@ -61,6 +71,10 @@ Read `docs/architecture.md` before changing the data model. In short:
   once, `:SYSTem:SELFCal?` reports `DONE` even mid-run (observed at 78%), and
   `STATus:OPERation` stays 0. Wait for the front panel to finish. While it
   runs, waveform queries time out and `:ACQuire:NUMACq?` may stop advancing.
+  Force trigger is **not** a command on this scope: `:TRIGger:FORCe` does not
+  exist, and force trigger is a *value* of `:TRIGger:MODE` (`FTRIG`). Forcing
+  therefore clobbers the configured sweep mode, and the driver re-asserts it on
+  the next `arm()`.
   Also expect the deterministic ADC comb from the 16-bit transfer path: a
   256-sample pattern giving spurs at every `k*fs/256` (`fs/8`, `fs/4`, `fs/2` are
   the strongest) on every channel including open ones. The driver defaults to
@@ -81,7 +95,8 @@ Setup first: `uv sync --all-groups --all-packages` (direnv runs this
 automatically in the shell; `--all-packages` pulls in the `apps/bdot_web`
 workspace member's `dash`/`plotly`).
 
-- Lint: `uv run ruff check src tests apps`
+- Lint: `uv run ruff check src tests apps` (the local `.venv/bin/ruff` is a
+  stale Nix symlink; `uvx ruff@0.16.2` matches CI)
 - Format: `uv run ruff format src tests apps` (CI enforces `--check`)
 - Typecheck: `uv run pyright src apps`
 - Test: `uv run pytest`

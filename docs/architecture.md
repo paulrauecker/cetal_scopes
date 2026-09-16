@@ -1,10 +1,10 @@
 # Architecture (agreed design)
 
-Status of this document: **implemented (milestone 1).** The core containers
-(`Antenna`, `Channel`, `Capture`, `Shot`), the pydantic `CaptureFile` schema and
-`load_capture` / `save_capture` are implemented, along with cross-correlation
-time alignment in `cetal_scopes.analysis`. Keep this in sync with the source as
-it lands.
+Status of this document: **implemented.** The core containers (`Antenna`,
+`Channel`, `Capture`, `Shot`), the pydantic `CaptureFile` / `ShotFile` schemas,
+`load_capture` / `save_capture` / `load_shot` / `save_shot`, the staged
+acquisition lifecycle, `cetal_scopes.acquisition`, and
+`cetal_scopes.analysis` are all in the source. Keep this in sync as it moves.
 
 ## Goal
 
@@ -18,8 +18,10 @@ came from.
 ```
 Scope (ABC template)          driver base; one subclass per instrument
  ├─ SiglentSDS6204L
- └─ SpectrumM5i3367
+ ├─ SpectrumM5i3367
+ └─ DemoScope                 synthetic; runs with no hardware
         │  connect() / configure() / acquire()
+        │  arm() / wait() / fetch()        staged, for a multi-instrument shot
         ▼
 Capture                       acquisition result + persistence unit
  ├─ raw   (n_channels, n_samples)   ADC codes
@@ -34,7 +36,7 @@ Channel                       per-channel row-view of the Capture
  └─ unit: str                 unit of the samples (V, T, T/s, ...)
         │
         ▼
-Shot                          runtime-only convenience aggregator of Captures
+Shot                          aggregator of Captures with per-capture offsets
         │
         ▼
 analysis code                 consumes Capture / Channel / Antenna
@@ -57,7 +59,12 @@ Responsibilities:
   `analysis.b_field` integrating a B-dot's `V` to `B` in tesla.
 - **`Shot`** — groups several `Capture`s belonging to one experiment, each under
   a label, together with a scalar per-capture time offset that maps them onto a
-  common axis. It is an in-memory convenience only; it is not persisted.
+  common axis. `save_shot` / `load_shot` persist it as a directory of captures
+  plus an index.
+- **`cetal_scopes.acquisition`** — drives several drivers through one
+  synchronized shot, holding an arm barrier so that no trigger is solicited
+  until every instrument has armed. It returns the captures that arrived even
+  when one instrument fails, together with per-instrument diagnostics.
 
 ## Data model decisions
 
@@ -95,8 +102,23 @@ A capture is a JSON metadata file plus NumPy sidecars:
 - Assumes all channels share one sample count. Unequal-length or segmented
   channels are deferred.
 
-Public I/O surface: `load_capture(path) -> Capture` and
-`save_capture(capture, path) -> None`. The names stay `capture`, not `shot`.
+A shot is a directory of those, plus an index:
+
+```
+<shot>/shot.json        # ShotFile: labels, offsets, reference, metadata
+<shot>/<label>.json     # one capture per instrument, as above
+<shot>/<label>.volts.npy
+<shot>/<label>.raw.npy
+```
+
+The index is written last, so its presence implies every capture it references
+is complete. Labels are mapped to filename-safe stems, since they come from
+user configuration and from segmented acquisitions (`m5i[0]`); a collision is
+an error rather than a silent overwrite.
+
+Public I/O surface: `load_capture(path) -> Capture`,
+`save_capture(capture, path) -> Path`, `load_shot(path) -> Shot` and
+`save_shot(shot, path) -> Path`.
 
 ## Scope interface
 
@@ -107,6 +129,40 @@ The template `Scope` class is an ABC with:
 - `acquire() -> Capture` — run one acquisition and normalize the result.
 - `close()` — release the connection.
 - context-manager support (`__enter__` / `__exit__`).
+
+Alongside the one-shot `acquire()`, every driver exposes a **staged
+lifecycle**, so several instruments can be armed before any of them is
+triggered:
+
+```
+idle --arm()--> armed --wait()--> triggered --fetch()--> idle
+```
+
+- `arm()` — make the hardware ready for a trigger and return *without*
+  blocking on it.
+- `wait(timeout) -> bool` — `True` when complete, `False` on expiry. It
+  **never raises `TimeoutError`**, and a `False` leaves the instrument armed so
+  the call can be repeated. That re-enterability is the point: it is the
+  primitive an application slices to stay responsive to an abort while waiting.
+- `fetch() -> Capture` / `fetch_all() -> list[Capture]` — transfer the result.
+- `abort()` — disarm and discard; safe when unarmed or disconnected, never
+  raises.
+- `force_trigger()` — trigger in software (a debugging path).
+- `trigger_status() -> str | None` — the vendor's own trigger state, when it
+  reports one.
+
+Two class-level capability flags say what a driver can really do:
+`supports_staged_acquisition` is `False` when the base class's emulation is in
+use — the emulation runs the whole acquisition inside `wait()`, so such an
+instrument cannot honestly join an arm barrier — and `supports_force_trigger`
+says whether a software trigger exists. `connect`/`configure`/`acquire`/`close`
+remain the only abstract methods, so existing drivers keep working unchanged.
+
+Driver-specific notes: the SDS6204L has no stateless force command — force
+trigger is a value of `:TRIGger:MODE` (`FTRIG`), so it clobbers the configured
+sweep mode and the driver re-asserts it on the next `arm()`. The M5i's
+`_apply_common_setup()` runs inside `arm()`; it cannot run later because it
+opens with `M2CMD_CARD_RESET`, which would destroy an in-flight acquisition.
 
 The first concrete driver is **Siglent SDS6204L** (SCPI; raw socket port 5025
 first, VISA fallback). The second is **Spectrum M5i.3367-x16**
@@ -164,12 +220,17 @@ segments.
 3. **Spectrum M5i.3367-x16 driver** over `spcm_core`. *(Done: Standard Single
    and Multiple Recording, hardware-verified including trigger configuration
    and the sample-rate readback path. FIFO streaming deferred, see below.)*
-4. Documentation finalization.
+4. **Synchronized multi-instrument shots** — the staged `arm`/`wait`/`fetch`
+   lifecycle, `cetal_scopes.acquisition`, `Shot` serialization, and the
+   `apps/capture_studio` browser front end. *(Done.)*
+5. Documentation finalization.
 
 ## Deliberately deferred
 
-- Clock/external synchronization across scopes.
+- Clock/external synchronization across scopes. The arm barrier in
+  `cetal_scopes.acquisition` guarantees only that no trigger is solicited
+  until every instrument has armed; it is not a shared clock, and the
+  residual is reported as `ShotResult.arm_spread_s` rather than hidden.
 - FIFO streaming acquisition (continuous, longer than on-board memory).
   Multiple Recording (segmented, one `Capture` per trigger) is implemented.
-- `Shot` serialization.
 - Unequal-length or segmented channels within a single `Capture`.

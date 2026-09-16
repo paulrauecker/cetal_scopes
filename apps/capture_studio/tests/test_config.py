@@ -1,0 +1,184 @@
+"""The TOML instrument inventory."""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+from typing import cast
+
+import pytest
+from config import (
+    InstrumentConfig,
+    Inventory,
+    build_specs,
+    demo_inventory,
+    dumps_toml,
+    load_inventory,
+    parse_inventory,
+    save_inventory,
+)
+
+from cetal_scopes import DemoScope, SiglentSDS6204L, SpectrumM5i3367
+
+BENCH = """
+poll_interval = 0.1
+default_timeout = 4.0
+
+[[instrument]]
+label = "siglent"
+driver = "siglent_sds6204l"
+address = "192.168.5.197"
+channels = ["C1", "C2"]
+timeout = 8.0
+
+[instrument.settings]
+sample_rate = 2.0e9
+record_length = 100000
+pretrigger = 0.5
+
+[instrument.settings.trigger]
+source = "C1"
+level = 0.2
+slope = "RISing"
+
+[[instrument]]
+label = "m5i"
+driver = "spectrum_m5i3367"
+address = "/dev/spcm0"
+channels = ["CH0"]
+direct_trigger = true
+
+[instrument.settings.trigger]
+source = "EXT"
+level = 1.5
+"""
+
+
+def test_a_bench_file_is_parsed() -> None:
+    inventory = parse_inventory(tomllib.loads(BENCH))
+
+    assert [item.label for item in inventory.instruments] == ["siglent", "m5i"]
+    assert inventory.poll_interval == 0.1
+    assert inventory.default_timeout == 4.0
+    assert inventory.instruments[0].settings["trigger"]["source"] == "C1"
+    assert inventory.instruments[1].direct_trigger is True
+
+
+def test_specs_build_the_right_drivers() -> None:
+    specs = build_specs(parse_inventory(tomllib.loads(BENCH)))
+
+    assert isinstance(specs[0].scope, SiglentSDS6204L)
+    assert isinstance(specs[1].scope, SpectrumM5i3367)
+    assert specs[0].timeout == 8.0
+    assert specs[1].direct_trigger is True
+
+
+def test_the_address_maps_to_each_driver_own_keyword() -> None:
+    # The M5i takes a device node, not an address; the config should not have
+    # to know that.
+    specs = build_specs(parse_inventory(tomllib.loads(BENCH)))
+    siglent = cast(SiglentSDS6204L, specs[0].scope)
+    m5i = cast(SpectrumM5i3367, specs[1].scope)
+
+    assert m5i._device == "/dev/spcm0"
+    assert siglent._address == "192.168.5.197"
+
+
+def test_channels_reach_both_the_constructor_and_configure() -> None:
+    specs = build_specs(parse_inventory(tomllib.loads(BENCH)))
+    assert cast(SiglentSDS6204L, specs[0].scope).channels == ("C1", "C2")
+    assert specs[0].settings["channels"] == ["C1", "C2"]
+
+
+def test_a_disabled_instrument_is_left_out_of_the_run() -> None:
+    inventory = parse_inventory(tomllib.loads(BENCH))
+    inventory.instruments[1].enabled = False
+
+    assert [spec.label for spec in build_specs(inventory)] == ["siglent"]
+
+
+def test_an_inventory_with_nothing_enabled_is_rejected() -> None:
+    inventory = demo_inventory(1)
+    inventory.instruments[0].enabled = False
+
+    with pytest.raises(ValueError, match="no instruments are enabled"):
+        build_specs(inventory)
+
+
+def test_an_unknown_driver_is_rejected_by_name() -> None:
+    with pytest.raises(ValueError, match="unknown driver"):
+        InstrumentConfig(label="x", driver="tektronix")
+
+
+def test_duplicate_labels_are_rejected() -> None:
+    with pytest.raises(ValueError, match="labels must be unique"):
+        Inventory(
+            instruments=[
+                InstrumentConfig(label="a", driver="demo"),
+                InstrumentConfig(label="a", driver="demo"),
+            ]
+        )
+
+
+def test_an_empty_label_is_rejected() -> None:
+    with pytest.raises(ValueError, match="label must be non-empty"):
+        InstrumentConfig(label="   ", driver="demo")
+
+
+def test_a_non_positive_timeout_is_rejected() -> None:
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        InstrumentConfig(label="a", driver="demo", timeout=0.0)
+
+
+def test_an_unknown_key_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        InstrumentConfig(label="a", driver="demo", nonsense=1)  # type: ignore[call-arg]
+
+
+def test_both_spellings_of_the_instrument_list_cannot_be_mixed() -> None:
+    with pytest.raises(ValueError, match="not both"):
+        parse_inventory({"instrument": [], "instruments": []})
+
+
+def test_the_demo_inventory_builds_demo_scopes_with_different_skews() -> None:
+    specs = build_specs(demo_inventory(3))
+
+    assert len(specs) == 3
+    assert all(isinstance(spec.scope, DemoScope) for spec in specs)
+    skews = {cast(DemoScope, spec.scope)._skew for spec in specs}
+    assert len(skews) == 3  # so the shot genuinely needs aligning
+
+
+def test_the_demo_inventory_needs_at_least_one_instrument() -> None:
+    with pytest.raises(ValueError, match="at least one instrument"):
+        demo_inventory(0)
+
+
+def test_toml_round_trips_through_the_writer() -> None:
+    original = parse_inventory(tomllib.loads(BENCH))
+    assert parse_inventory(tomllib.loads(dumps_toml(original))) == original
+
+
+def test_the_demo_inventory_round_trips_too() -> None:
+    original = demo_inventory(2)
+    assert parse_inventory(tomllib.loads(dumps_toml(original))) == original
+
+
+def test_saving_and_loading_a_file(tmp_path: Path) -> None:
+    original = parse_inventory(tomllib.loads(BENCH))
+    path = save_inventory(original, tmp_path / "bench.toml")
+
+    assert load_inventory(path) == original
+
+
+def test_loading_a_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no inventory at"):
+        load_inventory(tmp_path / "nope.toml")
+
+
+def test_invalid_toml_is_reported_with_the_path(tmp_path: Path) -> None:
+    path = tmp_path / "bad.toml"
+    path.write_text("this is not = = toml")
+
+    with pytest.raises(ValueError, match="is not valid TOML"):
+        load_inventory(path)

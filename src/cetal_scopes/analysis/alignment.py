@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 import numpy as np
 from numpy.typing import NDArray
@@ -105,6 +106,24 @@ def estimate_time_offset(
     )
 
 
+def _default_max_lag(reference: Channel, signal: Channel) -> float:
+    """How far to search when the caller did not say.
+
+    :func:`estimate_time_offset` defaults to half the shorter record, measured
+    from zero lag. Across instruments that is often not enough: two scopes set
+    up with different pretriggers hold the same event at very different
+    positions in their records, and the true lag can sit outside the window
+    entirely -- the fit then returns a confident-looking number from noise.
+    Widening by the difference in recorded origins keeps the physically likely
+    lag inside the search.
+    """
+    span = min(
+        (reference.n_samples - 1) * reference.dt,
+        (signal.n_samples - 1) * signal.dt,
+    )
+    return 0.5 * span + abs(reference.t0 - signal.t0)
+
+
 def _pick_channel(
     capture_channels: Mapping[str, Channel], preferred: str | None
 ) -> Channel:
@@ -199,14 +218,26 @@ def align_shot(
             continue
         signal = _pick_channel(capture.channels, wanted.get(label))
         measured = estimate_time_offset(
-            reference_channel, signal, max_lag=max_lag, detrend=detrend
+            reference_channel,
+            signal,
+            max_lag=max_lag
+            if max_lag is not None
+            else _default_max_lag(reference_channel, signal),
+            detrend=detrend,
         )
-        offsets[label] = measured
+        # estimate_time_offset correlates the two records by *index* and never
+        # looks at t0, so its lag aligns the arrays, not the time axes. A
+        # shot's offset shifts the time axis, so the difference in recorded
+        # origins has to be added back -- it is exactly the pretrigger
+        # mismatch between two instruments set up differently, and ignoring it
+        # silently mis-aligns every shot whose captures do not share a t0.
+        corrected = replace(
+            measured,
+            offset=measured.offset + (reference_channel.t0 - signal.t0),
+        )
+        offsets[label] = corrected
         if apply:
-            # estimate_time_offset works on the channels' own axes, so its
-            # result already includes whatever t0 difference they had; the
-            # shot's own offset is a correction on top of the recorded axis.
-            shot.set_offset(label, measured.offset)
+            shot.set_offset(label, corrected.offset)
 
     if apply:
         shot.set_reference(label_ref)

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Capture studio</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/plotly.min.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <strong>Capture studio</strong>
+    <span id="status" class="status">idle</span>
+    <span class="spacer"></span>
+    <button id="connect">Connect</button>
+    <button id="capture" class="primary">Capture shot</button>
+    <label class="inline" title="Fire the shot in software instead of waiting for the trigger">
+      <input type="checkbox" id="direct"> direct trigger
+    </label>
+    <button id="abort">Abort</button>
+    <button id="disconnect">Disconnect</button>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Traces</h2>
+        <label>Layout
+          <select id="layout">
+            <option value="overlay">overlay all</option>
+            <option value="per-capture">one row per capture</option>
+            <option value="per-channel">one row per channel</option>
+          </select>
+        </label>
+        <label class="inline"><input type="checkbox" id="raw"> raw (skip processing)</label>
+        <button id="refresh">Refresh</button>
+      </div>
+      <div id="time-plot" class="plot"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Timing</h2>
+        <button id="autofit" title="Fit every capture against the reference by cross-correlation">Auto-fit</button>
+        <span id="autofit-note" class="note"></span>
+      </div>
+      <div id="offsets" class="offsets"></div>
+      <div id="instruments" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Spectrum</h2>
+        <label><input type="checkbox" id="psd"> PSD</label>
+        <label><input type="checkbox" id="logx" checked> log f</label>
+        <label><input type="checkbox" id="logy" checked> log y</label>
+        <label>Window
+          <select id="window">
+            <option>hann</option><option>hamming</option>
+            <option>blackman</option><option>flattop</option>
+            <option value="boxcar">rectangular</option>
+          </select>
+        </label>
+      </div>
+      <div id="fft-plot" class="plot"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Two-channel</h2>
+        <label>Panel
+          <select id="pair-panel">
+            <option value="coherence">coherence</option>
+            <option value="transfer">transfer function</option>
+            <option value="xy">XY</option>
+            <option value="spectrogram">spectrogram (A only)</option>
+          </select>
+        </label>
+        <label>A <select id="chan-a"></select></label>
+        <label>B <select id="chan-b"></select></label>
+      </div>
+      <div id="pair-plot" class="plot"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Processing</h2>
+        <select id="step-name"></select>
+        <button id="step-add">Add step</button>
+        <span id="step-summary" class="note"></span>
+      </div>
+      <div id="pipeline" class="pipeline"></div>
+      <div id="pipeline-warnings" class="note"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Measurements</h2>
+        <button id="measure">Refresh</button>
+      </div>
+      <div id="measurements" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Shot</h2>
+        <input id="shot-path" type="text" placeholder="shots/shot001" size="28">
+        <button id="shot-save">Save</button>
+        <button id="shot-load">Load</button>
+      </div>
+      <div id="shot-meta" class="note"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Log</h2>
+        <button id="log-clear">Clear</button>
+      </div>
+      <pre id="log" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

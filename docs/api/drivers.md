@@ -5,3 +5,9 @@
 ::: cetal_scopes.SiglentSDS6204L
 
 ::: cetal_scopes.SpectrumM5i3367
+
+::: cetal_scopes.DemoScope
+
+## Registry
+
+::: cetal_scopes.scopes.registry

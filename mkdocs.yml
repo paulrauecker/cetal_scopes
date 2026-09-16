@@ -37,9 +37,11 @@ nav:
       - Overview: api/reference.md
       - Core containers: api/core.md
       - Instrument drivers: api/drivers.md
+      - Synchronized acquisition: api/acquisition.md
       - Analysis: api/analysis.md
       - Plotting: api/plotting.md
   - Apps:
+      - Capture studio: apps/capture-studio.md
       - Real-time viewer: apps/realtime-viewer.md
       - B-dot probe: apps/bdot-probe.md
       - B-dot web app: apps/bdot-web.md

@@ -53,6 +53,11 @@ class DemoScope(Scope):
     skew : float, optional
         Seconds this instrument's trigger lags the nominal one, written into
         the capture's ``t0``. Lets a demo shot need real time alignment.
+    burst_width : float, optional
+        Gaussian width of the burst, in seconds. An absolute duration rather
+        than a fraction of the record, so two instruments digitizing at
+        different rates see the *same* physical event -- which is what makes
+        cross-correlating them across a demo shot meaningful.
     seed : int, optional
         Seed for the additive noise.
     """
@@ -69,6 +74,7 @@ class DemoScope(Scope):
         record_length: int = 8192,
         trigger_delay: float | None = 0.05,
         skew: float = 0.0,
+        burst_width: float = 2e-8,
         acquire_timeout: float = 10.0,
         seed: int = 0,
     ) -> None:
@@ -81,6 +87,7 @@ class DemoScope(Scope):
         self._pretrigger_spec: int | float = 0.5
         self._trigger_delay = trigger_delay
         self._skew = float(skew)
+        self._burst_width = float(burst_width)
         self._acquire_timeout = acquire_timeout
         self._trigger = TriggerSettings()
         self._frequency = 1e6
@@ -213,13 +220,22 @@ class DemoScope(Scope):
         t = t0 + np.arange(n, dtype=np.float64) * dt
 
         rows: list[NDArray[np.float64]] = []
-        # A narrow burst at t = 0 gives cross-correlation alignment a feature
-        # to lock onto; the tone alone is ambiguous by whole periods.
-        width = max(8.0 * dt, 0.02 * n * dt)
-        burst = np.exp(-0.5 * ((t - self._skew) / width) ** 2)
+        # The waveform is built on the axis *relative to this instrument's own
+        # trigger*, so every instrument records the same physical event and
+        # only its t0 differs. Tying the carrier phase to absolute time
+        # instead would give each instrument a differently phased wavelet,
+        # which no cross-correlation could align to better than a fraction of
+        # a period.
+        local = t - self._skew
+        # A narrow burst at the trigger gives alignment a feature to lock on
+        # to; the tone alone is ambiguous by whole periods. The width is an
+        # absolute duration, so instruments digitizing at different rates see
+        # the same event rather than differently shaped ones.
+        width = max(8.0 * dt, self._burst_width)
+        burst = np.exp(-0.5 * (local / width) ** 2)
         for index in range(len(self._channels)):
             frequency = self._frequency * (index + 1)
-            tone = self._amplitude * np.sin(2.0 * np.pi * frequency * t)
+            tone = self._amplitude * np.sin(2.0 * np.pi * frequency * local)
             noise = self._noise * self._rng.standard_normal(n)
             rows.append(tone * burst + noise)
 
@@ -240,6 +256,7 @@ class DemoScope(Scope):
             "record_length": n_samples,
             "pretrigger": pretrigger,
             "skew_s": self._skew,
+            "burst_width_s": self._burst_width,
             "trigger_source": self._trigger.source,
             "trigger_level_v": self._trigger.level,
             "trigger_slope": self._trigger.slope,

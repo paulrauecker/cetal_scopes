@@ -24,3 +24,5 @@ Apps are linted and type-checked in CI, but not counted in library coverage.
   member; needs `dash`/`plotly`, so run `uv sync --all-packages`).
 - `sg8_sweep/` — SG8 generator frequency-response sweep against a scope channel.
 - `rf_waterfall/` — live or recorded RF waterfall (spectrogram) of a scope channel.
+- `capture_studio/` — browser front end for multi-instrument single-shot
+  capture and analysis (a uv workspace member; needs `fastapi`/`uvicorn`).

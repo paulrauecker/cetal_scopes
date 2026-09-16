@@ -15,3 +15,7 @@
 ::: cetal_scopes.load_capture
 
 ::: cetal_scopes.save_capture
+
+::: cetal_scopes.load_shot
+
+::: cetal_scopes.save_shot
