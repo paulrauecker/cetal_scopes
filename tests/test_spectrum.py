@@ -6,6 +6,14 @@ import pytest
 from cetal_scopes import Capture, SpectrumM5i3367
 from cetal_scopes.scopes import spectrum
 from cetal_scopes.scopes.spectrum import (
+    M2CMD_CARD_ENABLETRIGGER,
+    M2CMD_CARD_RESET,
+    M2CMD_CARD_START,
+    M2CMD_CARD_STOP,
+    M2CMD_CARD_WAITREADY,
+    M2CMD_DATA_STARTDMA,
+    M2CMD_DATA_STOPDMA,
+    M2CMD_DATA_WAITDMA,
     SPC_AMP0,
     SPC_CARDMODE,
     SPC_CHENABLE,
@@ -17,6 +25,9 @@ from cetal_scopes.scopes.spectrum import (
     SPC_SAMPLERATE,
     SPC_SEGMENTSIZE,
     SPC_TIMEOUT,
+    SPC_TM_NEG,
+    SPC_TMASK_NONE,
+    SPC_TMASK_SOFTWARE,
     SPC_TRIG_ANDMASK,
     SPC_TRIG_CH0_LEVEL0,
     SPC_TRIG_CH0_MODE,
@@ -24,17 +35,6 @@ from cetal_scopes.scopes.spectrum import (
     SPC_TRIG_CH_ORMASK0,
     SPC_TRIG_ORMASK,
     SPCM_TYPE_AI,
-    M2CMD_CARD_ENABLETRIGGER,
-    M2CMD_CARD_RESET,
-    M2CMD_CARD_START,
-    M2CMD_CARD_STOP,
-    M2CMD_CARD_WAITREADY,
-    M2CMD_DATA_STARTDMA,
-    M2CMD_DATA_STOPDMA,
-    M2CMD_DATA_WAITDMA,
-    SPC_TM_NEG,
-    SPC_TMASK_NONE,
-    SPC_TMASK_SOFTWARE,
     codes_to_volts,
     deinterleave,
     snap_input_range,
@@ -279,7 +279,7 @@ def test_close_does_not_drop_an_injected_card() -> None:
     assert card.closed
     # the driver does not own an injected card, so it keeps the reference
     # (mirrors SiglentSDS6204L's `_owns_transport` convention)
-    assert scope._card is card  # noqa: SLF001
+    assert scope._card is card
 
 
 # ---------------------------------------------------------------------------

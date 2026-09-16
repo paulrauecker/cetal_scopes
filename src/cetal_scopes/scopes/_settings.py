@@ -90,7 +90,7 @@ class PhysicalSettings:
     trigger: TriggerSettings | None = None
 
 
-def normalize_pretrigger(value: int | float) -> int | float:
+def normalize_pretrigger(value: float) -> int | float:
     """Validate a ``pretrigger`` spec: non-negative samples or a ``[0, 1]`` fraction.
 
     Returns the value unchanged (still either ``int`` samples or a ``float``
@@ -113,7 +113,7 @@ def normalize_pretrigger(value: int | float) -> int | float:
     )
 
 
-def pretrigger_samples(value: int | float, record_length: int) -> int:
+def pretrigger_samples(value: float, record_length: int) -> int:
     """Resolve an already-normalized ``pretrigger`` spec to a sample count."""
     if isinstance(value, float):
         return round(value * record_length)

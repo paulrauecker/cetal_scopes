@@ -27,9 +27,9 @@ from cetal_scopes.scopes._settings import (
 from cetal_scopes.scopes.base import Scope
 
 __all__ = [
+    "VDIV_LADDER",
     "AcquisitionPlan",
     "SiglentSDS6204L",
-    "VDIV_LADDER",
     "WaveDesc",
     "codes_to_volts",
     "parse_wavedesc",
@@ -885,7 +885,7 @@ class SiglentSDS6204L(Scope):
         *,
         sample_rate: float | None = None,
         record_length: int | None = None,
-        pretrigger: int | float | None = None,
+        pretrigger: float | None = None,
     ) -> AcquisitionPlan:
         """Configure sample rate, record length, and/or pretrigger.
 

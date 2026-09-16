@@ -527,7 +527,7 @@ class SpectrumM5i3367(Scope):
         """Set the record length in samples (or segment length, in Multiple Recording)."""
         self._record_length = snap_record_length(samples)
 
-    def set_pretrigger(self, value: int | float) -> None:
+    def set_pretrigger(self, value: float) -> None:
         """Set the pretrigger as a sample count (``int``) or record fraction (``float``)."""
         self._pretrigger_spec = normalize_pretrigger(value)
 

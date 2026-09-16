@@ -80,7 +80,6 @@ import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.typing import NDArray
-
 from scipy import stats
 
 from cetal_scopes import Capture, SG8SignalGenerator, SiglentSDS6204L
