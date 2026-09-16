@@ -13,6 +13,7 @@ import struct
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import numpy as np
@@ -679,6 +680,9 @@ class SiglentSDS6204L(Scope):
         Injectable transport, primarily for tests.
     """
 
+    supports_staged_acquisition = True
+    supports_force_trigger = True
+
     def __init__(
         self,
         address: str = DEFAULT_ADDRESS,
@@ -714,6 +718,10 @@ class SiglentSDS6204L(Scope):
         self._last_memory_depth: str | None = None
         self._last_delay: float = 0.0
         self._last_acquisition_plan: AcquisitionPlan | None = None
+        self._armed = False
+        self._arm_count: int | None = None
+        self._trigger_mode_dirty = False
+        self._poll_interval = 0.05
 
     @property
     def idn(self) -> str:
@@ -1032,19 +1040,48 @@ class SiglentSDS6204L(Scope):
         """Set the maximum memory depth (e.g. ``10k``, ``1M``, ``10M``)."""
         self._write(f":ACQuire:MDEPth {depth}")
 
-    def acquire(self) -> Capture:
-        """Arm an acquisition, wait for it, and fetch the channels.
+    def arm(self) -> None:
+        """Set the sweep mode, latch the acquisition counter, and run.
 
-        The sweep mode comes from :attr:`trigger_mode` (default ``"SINGle"``).
-        Completion is detected via the ``:ACQuire:NUMACq?`` counter.
+        Returns as soon as the scope is running; it does not wait for the
+        trigger. Note that ``:TRIGger:RUN`` is asynchronous, so a return here
+        does not prove the front end has finished arming -- poll
+        :meth:`trigger_status` for the instrument's own view.
+        """
+        self._require_connected()
+        if self._armed:
+            raise RuntimeError("already armed; call fetch() or abort() first")
+        if self._streaming:
+            self._ensure_running()
+            self._arm_count = self._acquisition_count()
+        else:
+            self._write(":TRIGger:STOP")
+            self._write(f":TRIGger:MODE {self._trigger_mode}")
+            self._trigger_mode_dirty = False
+            self._arm_count = self._acquisition_count()
+            self._write(":TRIGger:RUN")
+        self._armed = True
 
-        In the default one-shot mode the scope is stopped before and after each
-        acquisition so the fetched buffer is a coherent snapshot. With
-        :attr:`streaming` enabled the scope is started on the first call and
-        left running, so later calls only wait for the next acquisition and
-        fetch it without stopping the scope. Streaming needs a free-running
-        sweep mode (e.g. ``AUTO``); in ``SINGle`` the counter stops advancing
-        between triggers.
+    def wait(self, timeout: float | None = None) -> bool:
+        """Poll ``:ACQuire:NUMACq?`` until it advances past the armed count.
+
+        Returns ``False`` on expiry without raising, leaving the scope armed so
+        the call can be repeated.
+        """
+        if not self._armed or self._arm_count is None:
+            raise RuntimeError("wait() called before arm()")
+        limit = self._acquire_timeout if timeout is None else timeout
+        deadline = time.monotonic() + limit
+        while True:
+            if self._acquisition_count() > self._arm_count:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(self._poll_interval, remaining))
+
+    def fetch(self) -> Capture:
+        """Fetch the completed acquisition's channels and disarm.
 
         Returns
         -------
@@ -1053,17 +1090,12 @@ class SiglentSDS6204L(Scope):
             sharing the first channel's timebase.
         """
         self._require_connected()
-        if self._streaming:
-            self._ensure_running()
-            before = self._acquisition_count()
-            self._wait_for_acquisition(before)
-        else:
+        if not self._armed:
+            raise RuntimeError("fetch() called before a completed wait()")
+        if not self._streaming:
             self._write(":TRIGger:STOP")
-            self._write(f":TRIGger:MODE {self._trigger_mode}")
-            before = self._acquisition_count()
-            self._write(":TRIGger:RUN")
-            self._wait_for_acquisition(before)
-            self._write(":TRIGger:STOP")
+        self._armed = False
+        self._arm_count = None
 
         volts_rows: list[NDArray[np.float64]] = []
         raw_rows: list[NDArray[Any]] = []
@@ -1093,7 +1125,92 @@ class SiglentSDS6204L(Scope):
             dt=dt,
             channel_names=tuple(names),
             raw=raw,
+            metadata=self._scope_metadata(dt, n_samples),
         )
+
+    def abort(self) -> None:
+        """Disarm and stop the scope. Safe when unarmed or disconnected."""
+        self._armed = False
+        self._arm_count = None
+        if not self._connected or self._transport is None:
+            return
+        if self._streaming:
+            # Aborting a live view must not stop the front panel.
+            return
+        try:
+            self._write(":TRIGger:STOP")
+        except OSError:
+            pass
+
+    def force_trigger(self) -> None:
+        """Force one acquisition via the ``FTRIG`` sweep mode.
+
+        The SDS6204L has no stateless force command: force trigger is a *value*
+        of ``:TRIGger:MODE``, so this clobbers the configured sweep mode. The
+        mode is re-asserted on the next :meth:`arm` (and, while streaming, on
+        the next :meth:`_ensure_running`).
+
+        Raises
+        ------
+        RuntimeError
+            If the scope is not armed.
+        """
+        self._require_connected()
+        if not self._armed:
+            raise RuntimeError("force_trigger() requires an armed scope")
+        self._write(":TRIGger:MODE FTRIG")
+        self._trigger_mode_dirty = True
+
+    def trigger_status(self) -> str | None:
+        """Return the instrument's trigger state.
+
+        One of ``Arm``, ``Ready``, ``Auto``, ``Trig'd``, ``Stop`` or ``Roll``,
+        as the scope spells it.
+        """
+        return self._query(":TRIGger:STATus?").strip()
+
+    def acquire(self) -> Capture:
+        """Arm an acquisition, wait for it, and fetch the channels.
+
+        The sweep mode comes from :attr:`trigger_mode` (default ``"SINGle"``).
+        Completion is detected via the ``:ACQuire:NUMACq?`` counter.
+
+        In the default one-shot mode the scope is stopped before and after each
+        acquisition so the fetched buffer is a coherent snapshot. With
+        :attr:`streaming` enabled the scope is started on the first call and
+        left running, so later calls only wait for the next acquisition and
+        fetch it without stopping the scope. Streaming needs a free-running
+        sweep mode (e.g. ``AUTO``); in ``SINGle`` the counter stops advancing
+        between triggers.
+
+        Returns
+        -------
+        Capture
+            Voltage and raw-code arrays shaped ``(n_channels, n_samples)``,
+            sharing the first channel's timebase.
+        """
+        return self._acquire_staged()
+
+    def _scope_metadata(self, dt: float, n_samples: int) -> dict[str, Any]:
+        """Provenance for a fetched capture, mirroring the M5i's card metadata."""
+        metadata: dict[str, Any] = {
+            "instrument": "Siglent SDS6204L",
+            "address": self._address,
+            "idn": self._idn,
+            "channels": list(self._channels),
+            "sample_width": self._sample_width,
+            "sample_rate_hz": 1.0 / dt if dt > 0 else None,
+            "record_length": n_samples,
+            "trigger_mode": self._trigger_mode,
+            "streaming": self._streaming,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        plan = self._last_acquisition_plan
+        if plan is not None:
+            metadata["timebase_s_per_div"] = plan.timebase
+            metadata["memory_depth"] = plan.memory_depth
+            metadata["delay_s"] = plan.delay
+        return metadata
 
     def _fetch_codes(self, channel: str) -> tuple[NDArray[Any], WaveDesc]:
         self._write(f":WAVeform:SOURce {channel}")
@@ -1170,18 +1287,11 @@ class SiglentSDS6204L(Scope):
             self._write(":TRIGger:RUN")
             self._running = True
             return
+        if self._trigger_mode_dirty:
+            self._write(f":TRIGger:MODE {self._trigger_mode}")
+            self._trigger_mode_dirty = False
         if self._query(":TRIGger:STATus?").strip().lower() == "stop":
             self._write(":TRIGger:RUN")
-
-    def _wait_for_acquisition(self, before: int) -> None:
-        deadline = time.monotonic() + self._acquire_timeout
-        while time.monotonic() < deadline:
-            if self._acquisition_count() > before:
-                return
-            time.sleep(0.05)
-        raise TimeoutError(
-            f"acquisition did not complete within {self._acquire_timeout:g}s"
-        )
 
     def _require_connected(self) -> _Transport:
         if not self._connected or self._transport is None:

@@ -31,6 +31,7 @@ constraint easy to violate across separate ``configure()`` calls.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -100,6 +101,9 @@ SPC_TRIG_CH_ORMASK0 = 40460
 SPC_TRIG_CH_ANDMASK0 = 40480
 SPC_TRIG_CH0_MODE = 40610
 SPC_TRIG_CH0_LEVEL0 = 42200
+SPC_TRIG_TERM = 40110
+SPC_TRIG_EXT0_MODE = 40510
+SPC_TRIG_EXT0_LEVEL0 = 42320
 
 SPCM_TYPE_AI = 1
 SPC_CM_INTPLL = 1
@@ -107,17 +111,25 @@ SPC_REC_STD_SINGLE = 1
 SPC_REC_STD_MULTI = 2
 SPC_TMASK_NONE = 0
 SPC_TMASK_SOFTWARE = 1
+SPC_TMASK_EXT0 = 2
 SPC_TM_POS = 1
 SPC_TM_NEG = 2
 
 M2CMD_CARD_RESET = 1
 M2CMD_CARD_START = 4
 M2CMD_CARD_ENABLETRIGGER = 8
+M2CMD_CARD_FORCETRIGGER = 16
 M2CMD_CARD_STOP = 64
 M2CMD_CARD_WAITREADY = 16384
 M2CMD_DATA_STARTDMA = 65536
 M2CMD_DATA_WAITDMA = 131072
 M2CMD_DATA_STOPDMA = 262144
+
+#: Accepted spellings of the card's external trigger input (Ext0, "Trig In").
+_EXTERNAL_SOURCES = frozenset({"EXT", "EXT0", "EX"})
+
+#: ``SPC_TRIG_EXT0_LEVEL0`` is in millivolts and clamps at +/-5 V.
+EXT0_LEVEL_LIMIT_MV = 5000
 
 _SLOPE_MODES = {
     "pos": SPC_TM_POS,
@@ -365,6 +377,23 @@ class _RealCard:
         )
 
 
+@dataclass(frozen=True)
+class _PendingAcquisition:
+    """Transfer geometry latched at :meth:`SpectrumM5i3367.arm` time.
+
+    Snapshotting these means a ``configure()`` arriving between arm and fetch
+    cannot change the size of the transfer that is already in flight.
+    """
+
+    record_length: int
+    """Samples per segment (the whole record in Standard Single)."""
+
+    pretrigger: int
+    n_segments: int | None
+    n_channels: int
+    total_samples: int
+
+
 class SpectrumM5i3367(Scope):
     """Driver for a Spectrum Instrumentation M5i.3367-x16 PCIe digitizer.
 
@@ -394,6 +423,9 @@ class SpectrumM5i3367(Scope):
         Injectable card implementation, primarily for tests.
     """
 
+    supports_staged_acquisition = True
+    supports_force_trigger = True
+
     def __init__(
         self,
         device: str = DEFAULT_DEVICE,
@@ -422,6 +454,8 @@ class SpectrumM5i3367(Scope):
         self._offset_v: dict[str, float] = dict.fromkeys(self._channels, 0.0)
         self._trigger = TriggerSettings()
         self._segments: int | None = None
+        self._armed = False
+        self._pending: _PendingAcquisition | None = None
 
     @property
     def product_name(self) -> str:
@@ -568,12 +602,17 @@ class SpectrumM5i3367(Scope):
     ) -> None:
         """Configure an edge trigger on one of the acquired channels.
 
-        ``source`` must name an acquired channel. ``level`` is in volts,
-        relative to that channel's current range and offset. ``None`` values
-        leave the existing setting unchanged.
+        ``source`` names either an acquired channel (``"CH0"``, ``"CH1"``) --
+        where ``level`` is in volts relative to that channel's current range
+        and offset -- or the card's external input (``"EXT"``), where ``level``
+        is in volts at the connector, within +/-5 V. ``None`` leaves the
+        existing setting unchanged; a ``source`` of ``None`` that was never set
+        means the software trigger, which fires immediately on start.
         """
         self._trigger = TriggerSettings(
-            source=source if source is not None else self._trigger.source,
+            source=source.strip().upper()
+            if source is not None
+            else self._trigger.source,
             level=level if level is not None else self._trigger.level,
             slope=slope if slope is not None else self._trigger.slope,
         )
@@ -585,6 +624,166 @@ class SpectrumM5i3367(Scope):
                 f"segments must be a positive int or None, got {segments!r}"
             )
         self._segments = segments
+
+    def arm(self) -> None:
+        """Write the full register sequence and start the card, trigger enabled.
+
+        The whole ordered setup (:meth:`_apply_common_setup`, card mode, memory
+        and transfer definition) happens here rather than in :meth:`configure`,
+        which still performs no I/O. It cannot move later: the sequence opens
+        with ``M2CMD_CARD_RESET``, which would destroy an in-flight
+        acquisition.
+
+        ``START | ENABLETRIGGER | STARTDMA`` does not block on the trigger, so
+        this returns with the card genuinely armed.
+
+        Raises
+        ------
+        RuntimeError
+            If already armed.
+        """
+        card = self._require_connected()
+        if self._armed:
+            raise RuntimeError(
+                "already armed; call fetch()/fetch_segments() or abort() first"
+            )
+        self._apply_common_setup()
+
+        segment_length = self._record_length
+        pretrigger = pretrigger_samples(self._pretrigger_spec, segment_length)
+        posttrigger = segment_length - pretrigger
+        n_channels = len(self._channels)
+
+        if self._segments is None:
+            card.set_i32(SPC_CARDMODE, SPC_REC_STD_SINGLE)
+            card.set_i64(SPC_MEMSIZE, segment_length)
+            total_samples = segment_length * n_channels
+        else:
+            card.set_i32(SPC_CARDMODE, SPC_REC_STD_MULTI)
+            card.set_i64(SPC_SEGMENTSIZE, segment_length)
+            card.set_i64(SPC_MEMSIZE, segment_length * self._segments)
+            total_samples = segment_length * self._segments * n_channels
+        card.set_i64(SPC_POSTTRIGGER, posttrigger)
+
+        card.def_transfer(total_samples * self._bytes_per_sample)
+        card.command(M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA)
+        self._pending = _PendingAcquisition(
+            record_length=segment_length,
+            pretrigger=pretrigger,
+            n_segments=self._segments,
+            n_channels=n_channels,
+            total_samples=total_samples,
+        )
+        self._armed = True
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait up to ``timeout`` seconds for the run and its DMA to finish.
+
+        A timeout is not an error state on this card -- the run is still going
+        and the wait may simply be re-entered, which is how an application
+        stays responsive while armed. Returns ``False`` rather than raising.
+        """
+        card = self._require_connected()
+        if not self._armed:
+            raise RuntimeError("wait() called before arm()")
+        limit = self._acquire_timeout if timeout is None else timeout
+        try:
+            card.command(
+                M2CMD_CARD_WAITREADY | M2CMD_DATA_WAITDMA,
+                timeout_ms=max(1, int(limit * 1000)),
+            )
+        except TimeoutError:
+            return False
+        return True
+
+    def fetch(self) -> Capture:
+        """Return the completed Standard Single acquisition.
+
+        Raises
+        ------
+        RuntimeError
+            If the card is configured for Multiple Recording (call
+            :meth:`fetch_segments`), or if no completed acquisition is pending.
+        """
+        if self._segments is not None:
+            raise RuntimeError(
+                "card is configured for Multiple Recording "
+                f"({self._segments} segments); call fetch_segments() "
+                "instead of fetch()"
+            )
+        pending = self._require_pending()
+        codes = self._read_pending(pending)
+        return self._build_capture(codes, pending.pretrigger, segment_index=None)
+
+    def fetch_segments(self) -> list[Capture]:
+        """Return one capture per segment of the completed Multiple Recording.
+
+        Raises
+        ------
+        RuntimeError
+            If the card is not configured for Multiple Recording, or if no
+            completed acquisition is pending.
+        """
+        if self._segments is None:
+            raise RuntimeError(
+                "card is not configured for Multiple Recording; call "
+                "set_segments(n) or pass 'segments' to configure() first"
+            )
+        pending = self._require_pending()
+        codes_all = self._read_pending(pending)
+
+        segment_length = pending.record_length
+        captures = []
+        for segment in range(pending.n_segments or 1):
+            start = segment * segment_length
+            end = start + segment_length
+            captures.append(
+                self._build_capture(
+                    codes_all[:, start:end],
+                    pending.pretrigger,
+                    segment_index=segment,
+                )
+            )
+        return captures
+
+    def fetch_all(self) -> list[Capture]:
+        """Every capture of the completed acquisition, whatever the card mode."""
+        if self._segments is not None:
+            return self.fetch_segments()
+        return [self.fetch()]
+
+    def abort(self) -> None:
+        """Stop the card and discard the pending acquisition.
+
+        Safe when unarmed and when disconnected; never raises.
+        """
+        self._armed = False
+        self._pending = None
+        if not self._connected or self._card is None:
+            return
+        try:
+            self._card.command(M2CMD_CARD_STOP)
+            self._card.command(M2CMD_DATA_STOPDMA)
+        except (RuntimeError, TimeoutError, OSError):
+            pass
+
+    def force_trigger(self) -> None:
+        """Generate exactly one trigger event in software.
+
+        Takes effect only while the card is waiting for a trigger, and
+        overrides the trigger enable state. In Multiple Recording it fills
+        exactly *one* segment, so forcing an ``n``-segment run needs ``n``
+        calls.
+
+        Raises
+        ------
+        RuntimeError
+            If the card is not armed.
+        """
+        card = self._require_connected()
+        if not self._armed:
+            raise RuntimeError("force_trigger() requires an armed card")
+        card.command(M2CMD_CARD_FORCETRIGGER)
 
     def acquire(self) -> Capture:
         """Run one Standard Single acquisition and return the capture.
@@ -604,27 +803,7 @@ class SpectrumM5i3367(Scope):
                 f"({self._segments} segments); call acquire_segments() "
                 "instead of acquire()"
             )
-        card = self._require_connected()
-        self._apply_common_setup()
-
-        record_length = self._record_length
-        pretrigger = pretrigger_samples(self._pretrigger_spec, record_length)
-        posttrigger = record_length - pretrigger
-
-        card.set_i32(SPC_CARDMODE, SPC_REC_STD_SINGLE)
-        card.set_i64(SPC_MEMSIZE, record_length)
-        card.set_i64(SPC_POSTTRIGGER, posttrigger)
-
-        n_channels = len(self._channels)
-        byte_count = record_length * n_channels * self._bytes_per_sample
-        card.def_transfer(byte_count)
-        self._start_and_wait(card)
-
-        raw = card.read_buffer(record_length * n_channels)
-        card.command(M2CMD_DATA_STOPDMA)
-
-        codes = deinterleave(raw, n_channels)
-        return self._build_capture(codes, pretrigger, segment_index=None)
+        return self._acquire_staged()
 
     def acquire_segments(self) -> list[Capture]:
         """Run one Multiple Recording acquisition and return one capture per segment.
@@ -647,53 +826,30 @@ class SpectrumM5i3367(Scope):
                 "card is not configured for Multiple Recording; call "
                 "set_segments(n) or pass 'segments' to configure() first"
             )
-        card = self._require_connected()
-        self._apply_common_setup()
-
-        n_segments = self._segments
-        segment_length = self._record_length
-        pretrigger = pretrigger_samples(self._pretrigger_spec, segment_length)
-        posttrigger = segment_length - pretrigger
-
-        card.set_i32(SPC_CARDMODE, SPC_REC_STD_MULTI)
-        card.set_i64(SPC_SEGMENTSIZE, segment_length)
-        card.set_i64(SPC_MEMSIZE, segment_length * n_segments)
-        card.set_i64(SPC_POSTTRIGGER, posttrigger)
-
-        n_channels = len(self._channels)
-        total_samples = segment_length * n_segments * n_channels
-        byte_count = total_samples * self._bytes_per_sample
-        card.def_transfer(byte_count)
-        self._start_and_wait(card)
-
-        raw = card.read_buffer(total_samples)
-        card.command(M2CMD_DATA_STOPDMA)
-
-        codes_all = deinterleave(raw, n_channels)
-        captures = []
-        for segment in range(n_segments):
-            start = segment * segment_length
-            end = start + segment_length
-            captures.append(
-                self._build_capture(
-                    codes_all[:, start:end], pretrigger, segment_index=segment
-                )
-            )
-        return captures
-
-    def _start_and_wait(self, card: _Card) -> None:
-        timeout_ms = int(self._acquire_timeout * 1000)
+        self.arm()
         try:
-            card.command(
-                M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA,
-                timeout_ms=timeout_ms,
-            )
-            card.command(M2CMD_CARD_WAITREADY | M2CMD_DATA_WAITDMA)
-        except TimeoutError as exc:
-            card.command(M2CMD_CARD_STOP)
-            raise TimeoutError(
-                f"acquisition did not complete within {self._acquire_timeout:g}s"
-            ) from exc
+            if not self.wait():
+                raise TimeoutError(
+                    f"acquisition did not complete within {self._acquire_timeout:g}s"
+                )
+        except BaseException:
+            self.abort()
+            raise
+        return self.fetch_segments()
+
+    def _require_pending(self) -> _PendingAcquisition:
+        pending = self._pending
+        if not self._armed or pending is None:
+            raise RuntimeError("fetch() called before a completed wait()")
+        return pending
+
+    def _read_pending(self, pending: _PendingAcquisition) -> NDArray[np.int16]:
+        card = self._require_connected()
+        raw = card.read_buffer(pending.total_samples)
+        card.command(M2CMD_DATA_STOPDMA)
+        self._armed = False
+        self._pending = None
+        return deinterleave(raw, pending.n_channels)
 
     def _apply_common_setup(self) -> None:
         """Write channel, clock, range/offset, and trigger registers, in order.
@@ -727,12 +883,27 @@ class SpectrumM5i3367(Scope):
 
         if self._trigger.source is None:
             card.set_i32(SPC_TRIG_ORMASK, SPC_TMASK_SOFTWARE)
+        elif self._trigger.source in _EXTERNAL_SOURCES:
+            # Ext0 ("Trig In"). Its level register is in millivolts referred to
+            # the connector, not to a channel's range, so it does not go
+            # through volts_to_code().
+            card.set_i32(SPC_TRIG_EXT0_MODE, _slope_mode(self._trigger.slope))
+            level = self._trigger.level if self._trigger.level is not None else 0.0
+            millivolts = round(level * 1000.0)
+            if not -EXT0_LEVEL_LIMIT_MV <= millivolts <= EXT0_LEVEL_LIMIT_MV:
+                raise ValueError(
+                    f"external trigger level {level!r} V is outside the card's "
+                    f"+/-{EXT0_LEVEL_LIMIT_MV / 1000:g} V range"
+                )
+            card.set_i32(SPC_TRIG_EXT0_LEVEL0, millivolts)
+            card.set_i32(SPC_TRIG_ORMASK, SPC_TMASK_EXT0)
         else:
             channel = self._trigger.source
             if channel not in self._channels:
                 raise ValueError(
                     f"trigger source {channel!r} is not one of the acquired "
-                    f"channels {self._channels!r}"
+                    f"channels {self._channels!r} and is not an external "
+                    f"source {tuple(sorted(_EXTERNAL_SOURCES))!r}"
                 )
             index = _CHANNEL_INDEX[channel]
             mode = _slope_mode(self._trigger.slope)

@@ -483,7 +483,8 @@ def test_acquire_timeout_stops_the_card_and_raises() -> None:
     with pytest.raises(TimeoutError, match="did not complete"):
         scope.acquire()
 
-    assert card.commands[-1] == M2CMD_CARD_STOP
+    # abort() stops the run and then releases the DMA transfer.
+    assert card.commands[-2:] == [M2CMD_CARD_STOP, M2CMD_DATA_STOPDMA]
 
 
 def test_acquire_raises_when_configured_for_multiple_recording() -> None:
