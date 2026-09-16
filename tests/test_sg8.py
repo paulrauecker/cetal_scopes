@@ -4,7 +4,9 @@ from cetal_scopes import SG8SignalGenerator
 
 
 class FakeTransport:
-    def __init__(self, *, idn: str = "Advantex,SG8-HP01M-C2U42HP315,12345,R1.4") -> None:
+    def __init__(
+        self, *, idn: str = "Advantex,SG8-HP01M-C2U42HP315,12345,R1.4"
+    ) -> None:
         self.idn = idn
         self.opened = False
         self.closed = False

@@ -77,8 +77,11 @@ from typing import Protocol, Self
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.typing import NDArray
+
+from scipy import stats
 
 from cetal_scopes import Capture, SG8SignalGenerator, SiglentSDS6204L
 from cetal_scopes.scopes.base import Scope
@@ -91,6 +94,8 @@ DEFAULT_POINTS = 40
 DEFAULT_POWER_DBM = -10.0
 DEFAULT_CYCLES = 20.0
 DEFAULT_SETTLE = 0.05
+DEFAULT_REPEATS = 1
+DEFAULT_CI_LEVEL = 0.95
 #: Minimum dB gap between a capture's two halves (see
 #: :func:`split_half_consistency_db`) before it's flagged as possibly unsettled.
 DEFAULT_SETTLE_WARN_DB = 6.0
@@ -134,7 +139,9 @@ def linear_sweep(start: float, stop: float, points: int) -> NDArray[np.float64]:
     return np.linspace(start, stop, points)
 
 
-def frequency_sweep(start: float, stop: float, points: int, *, log: bool = True) -> NDArray[np.float64]:
+def frequency_sweep(
+    start: float, stop: float, points: int, *, log: bool = True
+) -> NDArray[np.float64]:
     """Dispatch to :func:`log_sweep` or :func:`linear_sweep` on ``log``."""
     return log_sweep(start, stop, points) if log else linear_sweep(start, stop, points)
 
@@ -252,6 +259,20 @@ def split_half_consistency_db(
     return 20.0 * math.log10(hi / lo)
 
 
+def ci_halfwidth(values: Sequence[float], confidence: float) -> float:
+    """Half-width of a ``confidence``-level CI on the mean of ``values``.
+
+    Uses Student's t (appropriate for the small repeat counts this sweep
+    can afford). Returns ``nan`` for fewer than 2 values -- no repeats, no CI.
+    """
+    n = len(values)
+    if n < 2:
+        return float("nan")
+    std = float(np.std(np.asarray(values, dtype=np.float64), ddof=1))
+    t_val = float(stats.t.ppf((1.0 + confidence) / 2.0, df=n - 1))
+    return t_val * std / math.sqrt(n)
+
+
 @dataclass(frozen=True)
 class SweepResult:
     """Per-channel measured peak-to-peak amplitude across swept frequencies."""
@@ -261,6 +282,12 @@ class SweepResult:
     power_dbm: float
     settle_gap_db: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     """Per-channel :func:`split_half_consistency_db`, a settling diagnostic."""
+    amplitude_ci: dict[str, NDArray[np.float64]] = field(default_factory=dict)
+    """Per-channel CI half-width (Vpp) on :attr:`amplitudes`, from repeat
+    acquisitions at each frequency (see ``repeats`` in :func:`run_sweep`).
+    ``nan`` where fewer than 2 repeats were taken."""
+    ci_level: float = DEFAULT_CI_LEVEL
+    """Confidence level :attr:`amplitude_ci` was computed at."""
 
 
 class SignalSource(Protocol):
@@ -295,6 +322,8 @@ def run_sweep(
     reset_settle: float = 1.0,
     settle_warn_db: float = DEFAULT_SETTLE_WARN_DB,
     settle_warn_min_vpp: float = DEFAULT_SETTLE_WARN_MIN_VPP,
+    repeats: int = DEFAULT_REPEATS,
+    ci_level: float = DEFAULT_CI_LEVEL,
     on_point: Callable[[int, float, dict[str, float]], None] | None = None,
     on_warning: Callable[[str], None] | None = None,
 ) -> SweepResult:
@@ -328,6 +357,15 @@ def run_sweep(
     unsettled. The gap itself is always recorded in
     :attr:`SweepResult.settle_gap_db` for offline inspection either way.
 
+    ``repeats`` (default 1, no CI) takes that many independent captures at
+    each frequency instead of one; :attr:`SweepResult.amplitudes` is then
+    each point's mean across repeats, and :attr:`SweepResult.amplitude_ci`
+    holds the ``ci_level`` Student's-t CI half-width on that mean (see
+    :func:`ci_halfwidth`) -- a real repeat-to-repeat measurement of
+    variability (drift, settling, noise), not just within-one-capture noise.
+    The settle-gap diagnostic and warning are checked against every
+    individual repeat capture.
+
     ``scope=None`` drives the generator through the sweep without touching a
     scope at all (e.g. when it's read out separately); ``channels`` should
     then be empty, and the returned :class:`SweepResult` carries no
@@ -340,42 +378,55 @@ def run_sweep(
 
     if scope is not None and len(frequencies) > 0:
         lowest_freq = float(np.min(frequencies))
-        scope.configure({"timebase": timebase_for_frequency(lowest_freq, cycles=cycles)})
+        scope.configure(
+            {"timebase": timebase_for_frequency(lowest_freq, cycles=cycles)}
+        )
 
     amplitudes = {ch: np.full(len(frequencies), np.nan) for ch in channels}
+    amplitude_ci = {ch: np.full(len(frequencies), np.nan) for ch in channels}
     settle_gap = {ch: np.full(len(frequencies), np.nan) for ch in channels}
     try:
         for index, freq in enumerate(frequencies):
             generator.set_frequency(float(freq))
             generator.operation_complete()
-            point: dict[str, float] = {}
             time.sleep(settle)
             actual_freq = generator.frequency()
+            point: dict[str, float] = {}
             if scope is not None:
-                capture = scope.acquire()
-                for ch in channels:
-                    if ch not in capture:
-                        continue
-                    channel = capture[ch]
-                    amplitude = coherent_amplitude(
-                        channel.volts, channel.time, actual_freq
-                    )
-                    amplitudes[ch][index] = amplitude
-                    point[ch] = amplitude
-
-                    gap_db = split_half_consistency_db(
-                        channel.volts, channel.time, actual_freq
-                    )
-                    settle_gap[ch][index] = gap_db
-                    if (
-                        on_warning is not None
-                        and amplitude >= settle_warn_min_vpp
-                        and gap_db >= settle_warn_db
-                    ):
-                        on_warning(
-                            f"{ch} @ {actual_freq / 1e6:.3f} MHz: {gap_db:.1f} dB gap "
-                            "between capture halves (possibly not yet settled)"
+                readings: dict[str, list[float]] = {ch: [] for ch in channels}
+                worst_gap: dict[str, float] = {}
+                for _ in range(max(1, repeats)):
+                    capture = scope.acquire()
+                    for ch in channels:
+                        if ch not in capture:
+                            continue
+                        channel = capture[ch]
+                        amplitude = coherent_amplitude(
+                            channel.volts, channel.time, actual_freq
                         )
+                        readings[ch].append(amplitude)
+
+                        gap_db = split_half_consistency_db(
+                            channel.volts, channel.time, actual_freq
+                        )
+                        worst_gap[ch] = max(worst_gap.get(ch, 0.0), gap_db)
+                        if (
+                            on_warning is not None
+                            and amplitude >= settle_warn_min_vpp
+                            and gap_db >= settle_warn_db
+                        ):
+                            on_warning(
+                                f"{ch} @ {actual_freq / 1e6:.3f} MHz: {gap_db:.1f} dB "
+                                "gap between capture halves (possibly not yet settled)"
+                            )
+                for ch, values in readings.items():
+                    if not values:
+                        continue
+                    mean_amplitude = float(np.mean(values))
+                    amplitudes[ch][index] = mean_amplitude
+                    amplitude_ci[ch][index] = ci_halfwidth(values, ci_level)
+                    settle_gap[ch][index] = worst_gap[ch]
+                    point[ch] = mean_amplitude
             if on_point is not None:
                 on_point(index, actual_freq, point)
     finally:
@@ -386,6 +437,8 @@ def run_sweep(
         amplitudes=amplitudes,
         power_dbm=power_dbm,
         settle_gap_db=settle_gap,
+        amplitude_ci=amplitude_ci,
+        ci_level=ci_level,
     )
 
 
@@ -394,14 +447,69 @@ def plot_sweep(
     *,
     reference_vpp: float | None = None,
     log_x: bool = True,
+    single_ax: bool = False,
 ) -> Figure:
-    """One subplot per channel: amplitude (or gain, if referenced) vs frequency.
+    """Amplitude (or gain, if referenced) vs frequency, one trace per channel.
 
     ``reference_vpp`` picks dB gain (set) vs raw Vpp (``None``); ``log_x``
     picks a log- vs linearly-scaled frequency axis, independent of whether
-    the underlying sweep itself was log- or linearly-spaced.
+    the underlying sweep itself was log- or linearly-spaced. By default each
+    channel gets its own subplot (independent y-axis); ``single_ax``
+    overlays every channel's trace on one shared axis instead, so their
+    absolute levels are directly comparable.
     """
     channels = list(result.amplitudes)
+    ylabel = "gain (dB)" if reference_vpp else "Vpp (V)"
+
+    def to_plot_units(
+        amp: NDArray[np.float64], ci: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+        """``amp``/``ci`` (Vpp) to plot units: ``(y, y_lo, y_hi)``.
+
+        ``ci`` is ``nan`` where there weren't enough repeats for a CI, which
+        propagates to ``y_lo``/``y_hi`` -- callers should skip drawing a band
+        wherever those come back ``nan``.
+        """
+        if ci.shape != amp.shape:
+            ci = np.full(amp.shape, np.nan)
+        if reference_vpp:
+            with np.errstate(divide="ignore"):
+                y = 20.0 * np.log10(np.clip(amp, 1e-12, None) / reference_vpp)
+                y_lo = 20.0 * np.log10(np.clip(amp - ci, 1e-12, None) / reference_vpp)
+                y_hi = 20.0 * np.log10(np.clip(amp + ci, 1e-12, None) / reference_vpp)
+        else:
+            y, y_lo, y_hi = amp, amp - ci, amp + ci
+        return y, y_lo, y_hi
+
+    def plot_ci_band(
+        ax: Axes, ch: str, y_lo: NDArray[np.float64], y_hi: NDArray[np.float64]
+    ) -> None:
+        finite = np.isfinite(y_lo) & np.isfinite(y_hi)
+        if np.any(finite):
+            ax.fill_between(
+                result.frequencies[finite],
+                y_lo[finite],
+                y_hi[finite],
+                alpha=0.2,
+                label=f"{ch} {result.ci_level:.0%} CI" if single_ax else None,
+            )
+
+    if single_ax:
+        fig, ax = plt.subplots(figsize=(9.0, 5.0), layout="constrained")
+        for ch in channels:
+            y, y_lo, y_hi = to_plot_units(
+                result.amplitudes[ch], result.amplitude_ci.get(ch, np.array([]))
+            )
+            plot_ci_band(ax, ch, y_lo, y_hi)
+            ax.plot(result.frequencies, y, marker=".", label=ch)
+        ax.set_xscale("log" if log_x else "linear")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("frequency (Hz)")
+        ax.legend()
+        fig.suptitle(f"SG8 sweep @ {result.power_dbm:g} dBm")
+        return fig
+
     fig, axes_obj = plt.subplots(
         len(channels),
         1,
@@ -411,15 +519,12 @@ def plot_sweep(
     )
     axes = [axes_obj] if len(channels) == 1 else list(axes_obj)
     for ax, ch in zip(axes, channels):
-        amp = result.amplitudes[ch]
-        if reference_vpp:
-            with np.errstate(divide="ignore"):
-                y = 20.0 * np.log10(np.clip(amp, 1e-12, None) / reference_vpp)
-            ax.set_ylabel("gain (dB)")
-        else:
-            y = amp
-            ax.set_ylabel("Vpp (V)")
+        y, y_lo, y_hi = to_plot_units(
+            result.amplitudes[ch], result.amplitude_ci.get(ch, np.array([]))
+        )
+        plot_ci_band(ax, ch, y_lo, y_hi)
         ax.plot(result.frequencies, y, marker=".")
+        ax.set_ylabel(ylabel)
         ax.set_xscale("log" if log_x else "linear")
         ax.grid(True, which="both", alpha=0.3)
         ax.set_title(ch)
@@ -441,8 +546,13 @@ def save_csv(result: SweepResult, path: str) -> None:
             ]
         )
         for i, freq in enumerate(result.frequencies):
-            gaps = [result.settle_gap_db.get(ch, [float("nan")] * (i + 1))[i] for ch in channels]
-            writer.writerow([freq, *[result.amplitudes[ch][i] for ch in channels], *gaps])
+            gaps = [
+                result.settle_gap_db.get(ch, [float("nan")] * (i + 1))[i]
+                for ch in channels
+            ]
+            writer.writerow(
+                [freq, *[result.amplitudes[ch][i] for ch in channels], *gaps]
+            )
 
 
 class DemoGenerator:
@@ -559,15 +669,23 @@ class DemoScope(Scope):
         n_samples = min(self._max_samples, max(2, round(window / self._dt)))
         t = np.arange(n_samples, dtype=np.float64) * self._dt
         freq = self._generator.frequency()
-        vpp = expected_vpp(self._generator.power, self._impedance) if self._generator.output else 0.0
+        vpp = (
+            expected_vpp(self._generator.power, self._impedance)
+            if self._generator.output
+            else 0.0
+        )
         rows = []
         for ch in self.channels:
             cutoff = DEMO_CUTOFFS.get(ch)
-            gain = 1.0 if cutoff is None else 1.0 / math.sqrt(1.0 + (freq / cutoff) ** 2)
+            gain = (
+                1.0 if cutoff is None else 1.0 / math.sqrt(1.0 + (freq / cutoff) ** 2)
+            )
             amplitude = 0.5 * vpp * gain
             noise = self._noise * self._rng.standard_normal(n_samples)
             rows.append(amplitude * np.sin(2.0 * np.pi * freq * t) + noise)
-        return Capture(volts=np.vstack(rows), t0=0.0, dt=self._dt, channel_names=self.channels)
+        return Capture(
+            volts=np.vstack(rows), t0=0.0, dt=self._dt, channel_names=self.channels
+        )
 
     def close(self) -> None:
         """No-op; safe to call repeatedly."""
@@ -604,13 +722,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--address", default=DEFAULT_ADDRESS, help="scope IP address")
     parser.add_argument(
-        "--channels", nargs="+", default=["C1", "C2", "C3"], help="channels, e.g. C1 C2 C3"
+        "--channels",
+        nargs="+",
+        default=["C1", "C2", "C3"],
+        help="channels, e.g. C1 C2 C3",
     )
     parser.add_argument(
-        "--power", type=float, default=DEFAULT_POWER_DBM, help="fixed RF Out level in dBm"
+        "--power",
+        type=float,
+        default=DEFAULT_POWER_DBM,
+        help="fixed RF Out level in dBm",
     )
     parser.add_argument(
-        "--start", type=float, default=DEFAULT_START_HZ, help="sweep start frequency in Hz"
+        "--start",
+        type=float,
+        default=DEFAULT_START_HZ,
+        help="sweep start frequency in Hz",
     )
     parser.add_argument(
         "--stop", type=float, default=DEFAULT_STOP_HZ, help="sweep stop frequency in Hz"
@@ -669,6 +796,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=DEFAULT_REPEATS,
+        help=(
+            "independent captures to take at each frequency, averaged for a "
+            "confidence interval plotted as a shaded band (default: "
+            f"{DEFAULT_REPEATS}, no CI)"
+        ),
+    )
+    parser.add_argument(
+        "--ci-level",
+        type=float,
+        default=DEFAULT_CI_LEVEL,
+        help=f"confidence level for --repeats' CI band (default: {DEFAULT_CI_LEVEL:g})",
+    )
+    parser.add_argument(
         "--impedance",
         choices=("50", "1M"),
         default="50",
@@ -695,12 +838,26 @@ def build_parser() -> argparse.ArgumentParser:
             "commanded source level"
         ),
     )
-    parser.add_argument("--output-csv", default=None, help="write sweep data to this CSV path")
-    parser.add_argument("--output-plot", default=None, help="save the plot to this PNG path")
+    parser.add_argument(
+        "--single-ax",
+        action="store_true",
+        help=(
+            "overlay all channels on one shared axis instead of one subplot "
+            "per channel, so their absolute levels are directly comparable"
+        ),
+    )
+    parser.add_argument(
+        "--output-csv", default=None, help="write sweep data to this CSV path"
+    )
+    parser.add_argument(
+        "--output-plot", default=None, help="save the plot to this PNG path"
+    )
     parser.add_argument(
         "--no-show", action="store_true", help="skip opening an interactive plot window"
     )
-    parser.add_argument("--demo", action="store_true", help="run against a synthetic source")
+    parser.add_argument(
+        "--demo", action="store_true", help="run against a synthetic source"
+    )
     parser.add_argument(
         "--no-scope",
         action="store_true",
@@ -741,7 +898,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     def on_point(index: int, freq: float, point: dict[str, float]) -> None:
         readings = "  ".join(f"{ch}={v * 1e3:7.2f} mVpp" for ch, v in point.items())
-        print(f"[{index + 1}/{len(frequencies)}] {freq / 1e6:9.3f} MHz  {readings}", flush=True)
+        print(
+            f"[{index + 1}/{len(frequencies)}] {freq / 1e6:9.3f} MHz  {readings}",
+            flush=True,
+        )
 
     def on_warning(message: str) -> None:
         print(f"warning: {message}", file=sys.stderr, flush=True)
@@ -755,7 +915,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scope.configure(
                     {
                         "vertical": {
-                            ch: {"impedance": args.impedance, "scale": vdiv, "coupling": "DC"}
+                            ch: {
+                                "impedance": args.impedance,
+                                "scale": vdiv,
+                                "coupling": "DC",
+                            }
                             for ch in channels
                         }
                     }
@@ -770,6 +934,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             settle=args.settle,
             settle_warn_db=args.settle_warn_db,
             settle_warn_min_vpp=args.settle_warn_min_vpp,
+            repeats=args.repeats,
+            ci_level=args.ci_level,
             on_point=on_point,
             on_warning=on_warning,
         )
@@ -783,7 +949,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.raw_volts or args.impedance != "50"
         else expected_vpp(args.power, impedance)
     )
-    fig = plot_sweep(result, reference_vpp=reference, log_x=args.log)
+    fig = plot_sweep(
+        result, reference_vpp=reference, log_x=args.log, single_ax=args.single_ax
+    )
 
     if args.output_csv is not None:
         save_csv(result, args.output_csv)

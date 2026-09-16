@@ -25,6 +25,9 @@ nav:
       - Siglent SDS6204L:
           - Overview: scopes/SDS6204L/index.md
           - Native API: scopes/SDS6204L/code.md
+      - Keysight InfiniiVision DSOX6004A:
+          - Overview: scopes/Keysight_InfiniiVision_DSOX6004A/index.md
+          - Native API: scopes/Keysight_InfiniiVision_DSOX6004A/code.md
   - Signal Generators:
       - SG8-HPSS10M-C2U42HP315:
           - Overview: scopes/SG8-HPSS10M-C2U42HP315/index.md

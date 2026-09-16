@@ -318,7 +318,9 @@ class SG8SignalGenerator:
 
         Must match the signal actually applied at REF In.
         """
-        self._write(f"ROSCillator:EXTernal:FREQuency {float(hertz):.4f}{_FREQUENCY_UNIT}")
+        self._write(
+            f"ROSCillator:EXTernal:FREQuency {float(hertz):.4f}{_FREQUENCY_UNIT}"
+        )
 
     def external_reference_frequency(self) -> float:
         """Return the configured external reference frequency in hertz."""
