@@ -6,9 +6,16 @@ A capture is a JSON metadata file plus NumPy sidecars::
     <stem>.volts.npy   # float64, shape (n_channels, n_samples)
     <stem>.raw.npy     # ADC codes, same shape (omitted when raw is None)
 
-Sidecars are resolved relative to the JSON path, so a capture directory can be
-moved. Writes are atomic (temp file + :func:`os.replace`) and the JSON is
-written last, so its presence implies the sidecars are complete.
+A :class:`~cetal_scopes.shot.Shot` is a directory of those, plus an index::
+
+    <shot>/shot.json        # ShotFile: labels, offsets, reference, metadata
+    <shot>/<label>.json     # one capture per instrument, as above
+    <shot>/<label>.volts.npy
+    <shot>/<label>.raw.npy
+
+Sidecars are resolved relative to the JSON path, so a capture or shot directory
+can be moved. Writes are atomic (temp file + :func:`os.replace`) and the index
+is written last, so its presence implies everything it references is complete.
 """
 
 from __future__ import annotations
@@ -24,12 +31,19 @@ from numpy.typing import NDArray
 from cetal_scopes.capture import Capture
 from cetal_scopes.metadata import (
     FORMAT_VERSION,
+    SHOT_FORMAT_VERSION,
     AntennaModel,
     CaptureFile,
     ChannelMetadata,
+    ShotCaptureEntry,
+    ShotFile,
 )
+from cetal_scopes.shot import Shot
 
-__all__ = ["load_capture", "save_capture"]
+__all__ = ["load_capture", "load_shot", "save_capture", "save_shot"]
+
+SHOT_INDEX = "shot.json"
+"""Name of a shot directory's index file."""
 
 
 def _json_path(path: str | os.PathLike[str]) -> Path:
@@ -218,3 +232,124 @@ def load_capture(path: str | os.PathLike[str]) -> Capture:
         units=units,
         metadata=dict(file.metadata),
     )
+
+
+def _label_to_stem(label: str) -> str:
+    """Turn a shot label into a filename stem.
+
+    Labels come from user configuration and segmented acquisitions
+    (``"m5i[2]"``), so characters that a path cannot carry are replaced.
+    """
+    stem = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in label
+    )
+    stem = stem.strip("._")
+    return stem or "capture"
+
+
+def save_shot(shot: Shot, path: str | os.PathLike[str]) -> Path:
+    """Save ``shot`` as a directory of captures plus an index.
+
+    The index is written last, so the presence of ``shot.json`` implies every
+    capture it references is complete.
+
+    Parameters
+    ----------
+    shot : Shot
+        The shot to persist. It must have at least one capture.
+    path : str or path-like
+        Directory to create. Existing capture files with colliding names are
+        overwritten.
+
+    Returns
+    -------
+    pathlib.Path
+        The index path that was written.
+
+    Raises
+    ------
+    ValueError
+        If the shot is empty, or two labels collide once turned into filenames.
+    """
+    if not shot.captures:
+        raise ValueError("cannot save a shot with no captures")
+
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    entries: list[ShotCaptureEntry] = []
+    used: dict[str, str] = {}
+    for label, capture in shot.captures.items():
+        stem = _label_to_stem(label)
+        if stem in used:
+            raise ValueError(
+                f"labels {used[stem]!r} and {label!r} both map to the filename "
+                f"{stem!r}; rename one of them"
+            )
+        used[stem] = label
+        capture_json = save_capture(capture, directory / f"{stem}.json")
+        entries.append(
+            ShotCaptureEntry(
+                label=label,
+                offset_s=shot.time_offset(label),
+                capture_json=capture_json.name,
+            )
+        )
+
+    file = ShotFile(
+        reference=shot.reference,
+        captures=entries,
+        metadata=dict(shot.metadata),
+    )
+    index = directory / SHOT_INDEX
+    _write_text_atomic(index, file.model_dump_json(indent=2) + "\n")
+    return index
+
+
+def load_shot(path: str | os.PathLike[str]) -> Shot:
+    """Load a shot saved by :func:`save_shot`.
+
+    Parameters
+    ----------
+    path : str or path-like
+        The shot directory, or its ``shot.json`` directly.
+
+    Returns
+    -------
+    Shot
+        Reconstructed shot, with per-capture offsets and reference restored.
+
+    Raises
+    ------
+    ValueError
+        If the format version is unknown or the index is inconsistent.
+    FileNotFoundError
+        If the index or a referenced capture is missing.
+    """
+    target = Path(path)
+    index = target if target.is_file() else target / SHOT_INDEX
+    if not index.is_file():
+        raise FileNotFoundError(f"no shot index at {index}")
+
+    file = ShotFile.model_validate_json(index.read_text(encoding="utf-8"))
+    if file.format_version != SHOT_FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported shot format_version {file.format_version!r}; "
+            f"this reader supports {SHOT_FORMAT_VERSION}"
+        )
+
+    base = index.parent
+    shot = Shot(metadata=dict(file.metadata))
+    for entry in file.captures:
+        capture_path = _resolve_sidecar(base, entry.capture_json)
+        shot.add(entry.label, load_capture(capture_path), offset=entry.offset_s)
+
+    if file.reference is not None:
+        if file.reference not in shot:
+            raise ValueError(
+                f"shot reference {file.reference!r} is not one of the saved "
+                f"captures {sorted(shot)!r}"
+            )
+        shot.set_reference(file.reference)
+    return shot

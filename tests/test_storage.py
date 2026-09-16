@@ -5,7 +5,17 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from cetal_scopes import Antenna, Capture, TransferFunction, load_capture, save_capture
+from cetal_scopes import (
+    Antenna,
+    Capture,
+    Shot,
+    TransferFunction,
+    load_capture,
+    load_shot,
+    save_capture,
+    save_shot,
+)
+from cetal_scopes.metadata import SHOT_FORMAT_VERSION
 
 
 def make_antenna() -> Antenna:
@@ -153,3 +163,151 @@ def test_unknown_json_field_is_rejected(tmp_path: Path) -> None:
 def test_load_missing_json_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_capture(tmp_path / "nope.json")
+
+
+# ---------------------------------------------------------------------------
+# Shots
+# ---------------------------------------------------------------------------
+
+
+def make_shot() -> Shot:
+    siglent = Capture(
+        volts=np.arange(6, dtype=np.float64).reshape(2, 3),
+        t0=-1e-9,
+        dt=1e-9,
+        channel_names=("C1", "C2"),
+        raw=np.arange(6, dtype=np.int16).reshape(2, 3),
+        metadata={"instrument": "Siglent SDS6204L"},
+    )
+    m5i = Capture(
+        volts=np.ones((1, 4), dtype=np.float64),
+        t0=0.0,
+        dt=2e-10,
+        channel_names=("CH0",),
+    )
+    shot = Shot(metadata={"shot_id": "s-1", "arm_spread_s": 0.002})
+    shot.add("siglent", siglent)
+    shot.add("m5i", m5i, offset=3.5e-9)
+    return shot
+
+
+def test_shot_round_trip(tmp_path: Path) -> None:
+    shot = make_shot()
+    index = save_shot(shot, tmp_path / "shot001")
+    loaded = load_shot(index.parent)
+
+    assert list(loaded) == ["siglent", "m5i"]
+    assert loaded.reference == "siglent"
+    assert loaded.offsets == {"siglent": 0.0, "m5i": 3.5e-9}
+    assert loaded.metadata == {"shot_id": "s-1", "arm_spread_s": 0.002}
+
+    np.testing.assert_array_equal(loaded["siglent"].volts, shot["siglent"].volts)
+    np.testing.assert_array_equal(loaded["siglent"].raw, shot["siglent"].raw)
+    assert loaded["siglent"].metadata["instrument"] == "Siglent SDS6204L"
+
+
+def test_shot_round_trip_without_raw(tmp_path: Path) -> None:
+    shot = Shot()
+    shot.add("only", Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1e-9))
+    loaded = load_shot(save_shot(shot, tmp_path / "s").parent)
+
+    assert loaded["only"].raw is None
+
+
+def test_shot_can_be_loaded_from_the_index_path(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "shot001")
+    assert list(load_shot(index)) == ["siglent", "m5i"]
+
+
+def test_shot_preserves_a_non_default_reference(tmp_path: Path) -> None:
+    shot = make_shot()
+    shot.set_reference("m5i")
+    assert load_shot(save_shot(shot, tmp_path / "s").parent).reference == "m5i"
+
+
+def test_shot_directory_is_movable(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "here")
+    moved = tmp_path / "there"
+    index.parent.rename(moved)
+
+    assert list(load_shot(moved)) == ["siglent", "m5i"]
+
+
+def test_shot_index_is_written_last(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "s")
+    index_mtime = index.stat().st_mtime_ns
+    captures = [p for p in index.parent.glob("*.json") if p != index]
+
+    assert captures
+    assert all(p.stat().st_mtime_ns <= index_mtime for p in captures)
+
+
+def test_segment_labels_are_made_filename_safe(tmp_path: Path) -> None:
+    shot = Shot()
+    shot.add("m5i[0]", Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1e-9))
+    shot.add("m5i[1]", Capture(volts=np.ones((1, 2)), t0=0.0, dt=1e-9))
+    index = save_shot(shot, tmp_path / "s")
+
+    assert {p.name for p in index.parent.glob("*.json")} == {
+        "shot.json",
+        "m5i_0.json",
+        "m5i_1.json",
+    }
+    assert list(load_shot(index.parent)) == ["m5i[0]", "m5i[1]"]
+
+
+def test_saving_an_empty_shot_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no captures"):
+        save_shot(Shot(), tmp_path / "s")
+
+
+def test_colliding_labels_are_rejected(tmp_path: Path) -> None:
+    shot = Shot()
+    shot.add("a b", Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1e-9))
+    shot.add("a/b", Capture(volts=np.zeros((1, 2)), t0=0.0, dt=1e-9))
+
+    with pytest.raises(ValueError, match="both map to the filename"):
+        save_shot(shot, tmp_path / "s")
+
+
+def test_loading_a_missing_shot_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no shot index"):
+        load_shot(tmp_path / "nope")
+
+
+def test_unknown_shot_format_version_is_rejected(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "s")
+    payload = json.loads(index.read_text())
+    payload["format_version"] = SHOT_FORMAT_VERSION + 1
+    index.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="unsupported shot format_version"):
+        load_shot(index)
+
+
+def test_an_unknown_shot_reference_is_rejected(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "s")
+    payload = json.loads(index.read_text())
+    payload["reference"] = "ghost"
+    index.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="is not one of the saved captures"):
+        load_shot(index)
+
+
+def test_a_missing_capture_file_is_reported(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "s")
+    (index.parent / "m5i.json").unlink()
+
+    with pytest.raises(FileNotFoundError):
+        load_shot(index)
+
+
+def test_a_traversing_capture_reference_is_rejected(tmp_path: Path) -> None:
+    index = save_shot(make_shot(), tmp_path / "s")
+    payload = json.loads(index.read_text())
+    payload["captures"][0]["capture_json"] = "../elsewhere.json"
+    index.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="bare filename"):
+        load_shot(index)

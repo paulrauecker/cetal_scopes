@@ -10,7 +10,7 @@ from cetal_scopes.scopes.registry import DRIVERS, create_scope, driver_class
 from cetal_scopes.scopes.siglent import SiglentSDS6204L
 from cetal_scopes.scopes.spectrum import SpectrumM5i3367
 from cetal_scopes.shot import Shot
-from cetal_scopes.storage import load_capture, save_capture
+from cetal_scopes.storage import load_capture, load_shot, save_capture, save_shot
 
 __all__ = [
     "DRIVERS",
@@ -27,5 +27,7 @@ __all__ = [
     "create_scope",
     "driver_class",
     "load_capture",
+    "load_shot",
     "save_capture",
+    "save_shot",
 ]

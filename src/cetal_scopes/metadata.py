@@ -17,13 +17,20 @@ from cetal_scopes.antenna import Antenna, TransferFunction
 
 __all__ = [
     "FORMAT_VERSION",
+    "SHOT_FORMAT_VERSION",
     "AntennaModel",
     "CaptureFile",
     "ChannelMetadata",
+    "ShotCaptureEntry",
+    "ShotFile",
     "TransferFunctionModel",
 ]
 
 FORMAT_VERSION = 1
+
+#: Versioned independently of ``FORMAT_VERSION``: a shot is a container of
+#: captures, so the two schemas can move apart.
+SHOT_FORMAT_VERSION = 1
 
 
 class _Model(BaseModel):
@@ -121,4 +128,26 @@ class CaptureFile(_Model):
     volts_sidecar: str
     raw_sidecar: str | None = None
     channels: list[ChannelMetadata] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShotCaptureEntry(_Model):
+    """One capture's place in a saved shot."""
+
+    label: str
+    offset_s: float = 0.0
+    capture_json: str
+    """Bare filename of the capture's JSON, resolved next to ``shot.json``."""
+
+
+class ShotFile(_Model):
+    """Top-level JSON schema of a saved shot.
+
+    The waveform data lives in the per-capture files this references, so a
+    shot directory is self-contained and movable.
+    """
+
+    format_version: int = SHOT_FORMAT_VERSION
+    reference: str | None = None
+    captures: list[ShotCaptureEntry] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
