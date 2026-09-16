@@ -8,7 +8,7 @@ import pytest
 
 from cetal_scopes import Capture, Channel
 from cetal_scopes.analysis import fft
-from cetal_scopes.plotting import plot_capture, plot_spectrum
+from cetal_scopes.plotting import decimate_envelope, plot_capture, plot_spectrum
 
 
 def make_capture() -> Capture:
@@ -61,3 +61,63 @@ def test_plot_spectrum_psd_on_existing_axes() -> None:
     assert ax.get_yscale() == "log"
     assert ax.get_ylabel() == "PSD (V^2/Hz)"
     plt.close(ax.figure)
+
+
+# ---------------------------------------------------------------------------
+# decimate_envelope
+# ---------------------------------------------------------------------------
+
+
+def test_decimate_envelope_returns_short_traces_unchanged() -> None:
+    t = np.arange(10, dtype=np.float64)
+    v = np.arange(10, dtype=np.float64)
+    out_t, out_v = decimate_envelope(t, v, 100)
+
+    assert out_t is t
+    assert out_v is v
+
+
+def test_decimate_envelope_respects_the_point_budget() -> None:
+    t = np.arange(100_000, dtype=np.float64)
+    v = np.sin(t * 0.01)
+    out_t, out_v = decimate_envelope(t, v, 2000)
+
+    assert out_t.size <= 2000
+    assert out_t.size == out_v.size
+
+
+def test_decimate_envelope_keeps_a_narrow_spike_that_striding_would_lose() -> None:
+    n = 100_000
+    t = np.arange(n, dtype=np.float64)
+    v = np.zeros(n)
+    v[54_321] = 1.0  # one sample wide, nowhere near a stride boundary
+
+    strided_v = v[::100]
+    envelope_t, envelope_v = decimate_envelope(t, v, 2000)
+
+    assert strided_v.max() == 0.0  # plain striding drops it entirely
+    assert envelope_v.max() == 1.0
+    assert envelope_t[int(np.argmax(envelope_v))] == 54_321.0
+
+
+def test_decimate_envelope_keeps_both_extremes_of_each_bin() -> None:
+    n = 10_000
+    t = np.arange(n, dtype=np.float64)
+    v = np.sin(t * 0.1)
+    _, out_v = decimate_envelope(t, v, 200)
+
+    assert out_v.min() == pytest.approx(v.min(), abs=1e-6)
+    assert out_v.max() == pytest.approx(v.max(), abs=1e-6)
+
+
+def test_decimate_envelope_output_is_in_time_order() -> None:
+    t = np.arange(50_000, dtype=np.float64)
+    rng = np.random.default_rng(0)
+    out_t, _ = decimate_envelope(t, rng.standard_normal(50_000), 1000)
+
+    assert np.all(np.diff(out_t) > 0)
+
+
+def test_decimate_envelope_rejects_mismatched_lengths() -> None:
+    with pytest.raises(ValueError, match="same shape"):
+        decimate_envelope(np.arange(10.0), np.arange(5.0), 4)

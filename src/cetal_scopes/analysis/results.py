@@ -176,3 +176,86 @@ class TimeOffset:
             f"TimeOffset(offset={self.offset!r}, "
             f"correlation={self.correlation!r}, inverted={self.inverted!r})"
         )
+
+
+@dataclass(frozen=True)
+class Peak:
+    """One local maximum located in a channel.
+
+    Attributes
+    ----------
+    index : int
+        Sample index of the peak.
+    time : float
+        Time of the peak, in seconds.
+    value : float
+        Sample value at the peak.
+    prominence : float
+        How far the peak stands out from the surrounding baseline. This, not
+        height, is what separates a real feature from a ripple on a larger one.
+    width : float
+        Width at half prominence, in seconds.
+    """
+
+    index: int
+    time: float
+    value: float
+    prominence: float
+    width: float
+
+    def __repr__(self) -> str:
+        return (
+            f"Peak(time={self.time!r}, value={self.value!r}, "
+            f"prominence={self.prominence!r})"
+        )
+
+
+@dataclass(frozen=True)
+class PulseMetrics:
+    """Scope-style edge and pulse measurements of a channel.
+
+    ``base`` and ``top`` are the histogram-mode levels of the flat parts of the
+    waveform, not the minimum and maximum: overshoot and ringing would
+    otherwise inflate the amplitude and push the reference levels out, which is
+    exactly what makes naive rise times read short.
+
+    Every duration is ``nan`` when the waveform does not actually cross the
+    levels it would need to -- a channel with no edge has no rise time, and
+    reporting one would be a fabrication.
+
+    Attributes
+    ----------
+    base, top : float
+        Lower and upper settled levels.
+    amplitude : float
+        ``top - base``.
+    low_reference, high_reference : float
+        The crossing levels used, derived from ``low``/``high`` fractions.
+    rise_time, fall_time : float
+        Seconds between the reference crossings of the first rising and first
+        falling edge.
+    width : float
+        Seconds the waveform spends above the 50% level, around the peak.
+    fwhm : float
+        Full width at half maximum measured from ``base``, for a pulse sitting
+        on a baseline.
+    overshoot, undershoot : float
+        Excursion past ``top``/``base`` as a fraction of ``amplitude``.
+    peak_time, peak_value : float
+        The largest absolute excursion.
+    """
+
+    name: str
+    base: float
+    top: float
+    amplitude: float
+    low_reference: float
+    high_reference: float
+    rise_time: float
+    fall_time: float
+    width: float
+    fwhm: float
+    overshoot: float
+    undershoot: float
+    peak_time: float
+    peak_value: float

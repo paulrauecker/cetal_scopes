@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.signal import detrend as _scipy_detrend
 
 from cetal_scopes.analysis._util import DetrendMode, with_volts
 from cetal_scopes.channel import Channel
 
-__all__ = ["detrend", "gate", "remove_adc_comb", "resample", "subtract_baseline"]
+__all__ = [
+    "detrend",
+    "gate",
+    "remove_adc_comb",
+    "resample",
+    "resample_onto",
+    "subtract_baseline",
+]
 
 
 def gate(
@@ -195,6 +203,65 @@ def resample(
         volts=volts.astype(np.float64),
         t0=channel.t0,
         dt=new_dt,
+        antenna=channel.antenna,
+        unit=channel.unit,
+    )
+
+
+def resample_onto(
+    channel: Channel,
+    t: NDArray[np.float64],
+    *,
+    fill: float | None = None,
+) -> Channel:
+    """Interpolate the channel onto an arbitrary uniform time grid ``t``.
+
+    Where :func:`resample` changes a channel's sample rate on its own axis,
+    this places it on a grid shared with other channels -- typically
+    :meth:`~cetal_scopes.shot.Shot.common_time` -- which is what lets channels
+    from different instruments, recorded at different rates and time origins,
+    be overlaid or combined arithmetically.
+
+    Parameters
+    ----------
+    channel : Channel
+        Source channel.
+    t : ndarray
+        Target times in seconds. Must be uniformly spaced and increasing, since
+        a :class:`~cetal_scopes.channel.Channel` carries a single ``dt``.
+    fill : float, optional
+        Value for target times outside the channel's own span. Defaults to
+        ``nan``, so a gap is visible rather than silently filled with the
+        channel's edge values -- which is what :func:`numpy.interp` would do
+        and what would quietly invent data at the edges of a shot.
+
+    Returns
+    -------
+    Channel
+        The channel on the ``t`` grid (raw codes dropped).
+
+    Raises
+    ------
+    ValueError
+        If ``t`` has fewer than two points or is not uniformly increasing.
+    """
+    target = np.asarray(t, dtype=np.float64)
+    if target.ndim != 1 or target.size < 2:
+        raise ValueError("t must be a 1-D grid of at least two times")
+    steps = np.diff(target)
+    dt = float(steps[0])
+    if dt <= 0:
+        raise ValueError("t must be increasing")
+    if not np.allclose(steps, dt, rtol=1e-9, atol=0.0):
+        raise ValueError("t must be uniformly spaced")
+
+    value = np.nan if fill is None else float(fill)
+    volts = np.interp(target, channel.time, channel.volts, left=value, right=value)
+    return Channel(
+        name=channel.name,
+        volts=np.asarray(volts, dtype=np.float64),
+        t0=float(target[0]),
+        dt=dt,
         antenna=channel.antenna,
         unit=channel.unit,
     )

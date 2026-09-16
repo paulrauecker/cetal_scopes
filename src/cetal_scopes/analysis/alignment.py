@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import signal as _scipy_signal
@@ -9,8 +11,9 @@ from scipy import signal as _scipy_signal
 from cetal_scopes.analysis.results import TimeOffset
 from cetal_scopes.analysis.time import resample
 from cetal_scopes.channel import Channel
+from cetal_scopes.shot import Shot
 
-__all__ = ["estimate_time_offset"]
+__all__ = ["align_shot", "estimate_time_offset"]
 
 
 def _unit_norm(values: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -100,3 +103,112 @@ def estimate_time_offset(
         inverted=peak_value < 0.0,
         max_lag=limit * dt,
     )
+
+
+def _pick_channel(
+    capture_channels: Mapping[str, Channel], preferred: str | None
+) -> Channel:
+    if preferred is not None:
+        if preferred not in capture_channels:
+            raise KeyError(preferred)
+        return capture_channels[preferred]
+    return next(iter(capture_channels.values()))
+
+
+def align_shot(
+    shot: Shot,
+    *,
+    reference: str | None = None,
+    channels: Mapping[str, str] | str | None = None,
+    max_lag: float | None = None,
+    detrend: bool = True,
+    apply: bool = True,
+) -> dict[str, TimeOffset]:
+    """Fit every capture's time offset against the reference capture.
+
+    Where :func:`estimate_time_offset` compares two channels,
+    this walks a whole shot: one channel of each capture is correlated against
+    one channel of the reference, and the measured offsets are written back
+    into the shot so that :meth:`~cetal_scopes.shot.Shot.aligned_channels`
+    puts everything on a common axis.
+
+    The returned offsets are inspectable, not magic -- each carries the peak
+    correlation and polarity that produced it, so a bad fit (a low correlation,
+    an unexpected inversion) is visible rather than silently applied.
+
+    Parameters
+    ----------
+    shot : Shot
+        The shot to align. Needs at least two captures.
+    reference : str, optional
+        Label whose time axis every other capture is fitted to. Defaults to the
+        shot's current :attr:`~cetal_scopes.shot.Shot.reference`.
+    channels : mapping or str, optional
+        Which channel of each capture to correlate. A single string names the
+        same channel in every capture; a mapping gives it per label. Labels not
+        covered use their capture's first channel.
+    max_lag : float, optional
+        Largest lag considered, in seconds. Passed through to
+        :func:`estimate_time_offset`.
+    detrend : bool, optional
+        Remove a linear trend before correlating.
+    apply : bool, optional
+        Write the fitted offsets into ``shot``. Set ``False`` to measure
+        without modifying the shot.
+
+    Returns
+    -------
+    dict of str to TimeOffset
+        One entry per non-reference capture. The reference itself is omitted:
+        its offset is zero by definition.
+
+    Raises
+    ------
+    ValueError
+        If the shot has fewer than two captures, or has no reference.
+    KeyError
+        If a named channel is not present in its capture.
+
+    Examples
+    --------
+    >>> offsets = align_shot(shot)  # doctest: +SKIP
+    >>> {label: round(o.offset * 1e9, 1) for label, o in offsets.items()}  # doctest: +SKIP
+    {'m5i': 3.5}
+    """
+    if len(shot.captures) < 2:
+        raise ValueError("aligning a shot needs at least two captures")
+
+    label_ref = reference if reference is not None else shot.reference
+    if label_ref is None:
+        raise ValueError("shot has no reference capture")
+    if label_ref not in shot.captures:
+        raise ValueError(f"reference {label_ref!r} is not a capture of this shot")
+
+    if isinstance(channels, str):
+        wanted: Mapping[str, str] = dict.fromkeys(shot.captures, channels)
+    else:
+        wanted = channels or {}
+
+    reference_channel = _pick_channel(
+        shot.captures[label_ref].channels, wanted.get(label_ref)
+    )
+
+    offsets: dict[str, TimeOffset] = {}
+    for label, capture in shot.captures.items():
+        if label == label_ref:
+            continue
+        signal = _pick_channel(capture.channels, wanted.get(label))
+        measured = estimate_time_offset(
+            reference_channel, signal, max_lag=max_lag, detrend=detrend
+        )
+        offsets[label] = measured
+        if apply:
+            # estimate_time_offset works on the channels' own axes, so its
+            # result already includes whatever t0 difference they had; the
+            # shot's own offset is a correction on top of the recorded axis.
+            shot.set_offset(label, measured.offset)
+
+    if apply:
+        shot.set_reference(label_ref)
+        shot.set_offset(label_ref, 0.0)
+    return offsets

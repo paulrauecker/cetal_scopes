@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
 
-from cetal_scopes import Antenna, Channel
+from cetal_scopes import Antenna, Capture, Channel, Shot
 from cetal_scopes.analysis import (
     detrend,
     gate,
     remove_adc_comb,
     resample,
+    resample_onto,
     subtract_baseline,
 )
 
@@ -163,3 +164,82 @@ def test_processing_preserves_antenna_and_unit() -> None:
     )
     assert all(result.antenna is antenna for result in results)
     assert all(result.unit == "T" for result in results)
+
+
+# ---------------------------------------------------------------------------
+# resample_onto
+# ---------------------------------------------------------------------------
+
+
+def test_resample_onto_places_a_channel_on_a_shared_grid() -> None:
+    channel = Channel(name="C1", volts=np.arange(5, dtype=np.float64), t0=0.0, dt=1.0)
+    grid = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+    moved = resample_onto(channel, grid)
+
+    assert moved.t0 == 0.0
+    assert moved.dt == pytest.approx(0.5)
+    np.testing.assert_allclose(moved.volts, [0.0, 0.5, 1.0, 1.5, 2.0])
+
+
+def test_resample_onto_fills_outside_the_span_with_nan_by_default() -> None:
+    channel = Channel(name="C1", volts=np.ones(3), t0=0.0, dt=1.0)
+    moved = resample_onto(channel, np.array([-2.0, -1.0, 0.0, 1.0, 2.0, 3.0]))
+
+    # np.interp would hold the edge values here, quietly inventing data at
+    # the edges of a shot; a gap must stay visible.
+    assert np.isnan(moved.volts[0])
+    assert np.isnan(moved.volts[1])
+    assert np.isnan(moved.volts[-1])
+    np.testing.assert_allclose(moved.volts[2:5], 1.0)
+
+
+def test_resample_onto_accepts_an_explicit_fill() -> None:
+    channel = Channel(name="C1", volts=np.ones(3), t0=0.0, dt=1.0)
+    moved = resample_onto(channel, np.array([-1.0, 0.0, 1.0, 2.0, 3.0]), fill=0.0)
+
+    assert moved.volts[0] == 0.0
+    assert moved.volts[-1] == 0.0
+
+
+def test_resample_onto_carries_the_antenna_and_unit() -> None:
+    channel = Channel(
+        name="C1",
+        volts=np.ones(4),
+        t0=0.0,
+        dt=1.0,
+        antenna=Antenna(name="probe"),
+        unit="T/s",
+        raw=np.arange(4, dtype=np.int16),
+    )
+    moved = resample_onto(channel, np.arange(4, dtype=np.float64))
+
+    assert moved.antenna is not None
+    assert moved.unit == "T/s"
+    assert moved.raw is None
+
+
+def test_resample_onto_puts_two_captures_on_one_axis() -> None:
+    shot = Shot()
+    shot.add("a", Capture(volts=np.ones((1, 8)), t0=0.0, dt=1e-9))
+    shot.add("b", Capture(volts=np.full((1, 4), 2.0), t0=0.0, dt=2e-9), offset=1e-9)
+
+    grid = shot.common_time()
+    first = resample_onto(shot.aligned_channel("a", "CH1"), grid)
+    second = resample_onto(shot.aligned_channel("b", "CH1"), grid)
+
+    assert first.n_samples == second.n_samples == grid.size
+    assert first.dt == second.dt
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [
+        np.array([0.0]),
+        np.array([1.0, 0.0, 2.0]),
+        np.array([0.0, 1.0, 5.0]),
+    ],
+)
+def test_resample_onto_rejects_a_bad_grid(grid: np.ndarray) -> None:
+    channel = Channel(name="C1", volts=np.ones(4), t0=0.0, dt=1.0)
+    with pytest.raises(ValueError):
+        resample_onto(channel, grid)
