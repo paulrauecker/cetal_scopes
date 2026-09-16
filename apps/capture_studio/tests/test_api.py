@@ -424,3 +424,79 @@ def test_the_app_can_also_be_driven_over_asgi_transport(
 
     payload = asyncio.run(main())
     assert payload["status"]["complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# Vector panel and export
+# ---------------------------------------------------------------------------
+
+
+def test_the_vector_panel_needs_three_channels_from_one_capture(
+    client: TestClient,
+) -> None:
+    capture(client)
+    response = client.get(
+        "/api/figure?panel=vector&frequency=2e7&channels=demo1:CH1,demo1:CH2"
+    )
+
+    assert response.status_code == 400
+    assert "exactly three channels" in response.json()["detail"]
+
+
+def test_the_vector_panel_needs_a_frequency(client: TestClient) -> None:
+    capture(client)
+    response = client.get("/api/figure?panel=vector&channels=demo1:CH1")
+
+    assert response.status_code == 400
+    assert "needs a frequency" in response.json()["detail"]
+
+
+def test_the_vector_panel_renders_for_a_three_channel_capture(
+    session: StudioSession,
+) -> None:
+    for item in session.inventory.instruments:
+        item.channels = ["X", "Y", "Z"]
+        item.settings["channels"] = ["X", "Y", "Z"]
+
+    with TestClient(create_app(session)) as client:
+        capture(client)
+        response = client.get(
+            "/api/figure?panel=vector&frequency=2e7&channels=demo1:X,demo1:Y,demo1:Z"
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["figure"]["data"][0]["type"] == "scatter3d"
+
+
+def test_csv_export_is_downloadable(client: TestClient) -> None:
+    capture(client)
+    response = client.get("/api/export?format=csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.text.splitlines()[0].startswith("time_s,demo1:CH1")
+
+
+def test_npz_export_is_downloadable(client: TestClient) -> None:
+    import io
+
+    import numpy as np
+
+    capture(client)
+    response = client.get("/api/export?format=npz")
+    loaded = np.load(io.BytesIO(response.content), allow_pickle=False)
+
+    assert response.status_code == 200
+    assert "demo1__CH1__v" in loaded
+
+
+def test_export_without_a_shot_is_refused(client: TestClient) -> None:
+    response = client.get("/api/export?format=csv")
+    assert response.status_code == 400
+    assert "no shot yet" in response.json()["detail"]
+
+
+def test_an_unknown_export_format_is_refused(client: TestClient) -> None:
+    capture(client)
+    assert client.get("/api/export?format=png").status_code == 422

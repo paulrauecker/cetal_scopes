@@ -18,9 +18,11 @@ import numpy as np
 
 from cetal_scopes.analysis import coherence as _coherence
 from cetal_scopes.analysis import fft as _fft
-from cetal_scopes.analysis import pulse_metrics, stats, stft
+from cetal_scopes.analysis import pulse_metrics, stats, stft, vector_at
 from cetal_scopes.analysis import resample_onto as _resample_onto
 from cetal_scopes.analysis import transfer_function as _transfer_function
+from cetal_scopes.antenna import Antenna
+from cetal_scopes.capture import Capture
 from cetal_scopes.channel import Channel
 from cetal_scopes.plotting import decimate_envelope
 from cetal_scopes.shot import Shot
@@ -35,6 +37,7 @@ __all__ = [
     "spectrogram_figure",
     "time_figure",
     "transfer_figure",
+    "vector_figure",
     "xy_figure",
 ]
 
@@ -566,3 +569,97 @@ def measurement_table(
 def _finite(value: float) -> float | None:
     """``None`` for a measurement the waveform did not support, so JSON is valid."""
     return None if not np.isfinite(value) else float(value)
+
+
+def vector_figure(
+    shot: Shot,
+    keys: Sequence[str],
+    frequency: float,
+    *,
+    processed: dict[str, Channel] | None = None,
+) -> dict[str, Any]:
+    """A phase-correct field vector at ``frequency``, drawn in 3-D.
+
+    Unlike the obvious approach of plotting three FFT magnitudes -- which can
+    only ever point into the ``+++`` octant, since magnitudes are
+    non-negative -- this uses the complex amplitudes, so a component pointing
+    the other way is drawn pointing the other way.
+
+    All three channels must come from the same capture: relative phase is only
+    meaningful on a shared timebase.
+
+    Raises
+    ------
+    ValueError
+        If fewer than three channels are given, or they span more than one
+        capture.
+    KeyError
+        If a key is not a channel of this shot.
+    """
+    names = list(keys)
+    if len(names) != 3:
+        raise ValueError(f"a field vector needs exactly three channels, got {names!r}")
+
+    labels = {key.split(":", 1)[0] for key in names}
+    if len(labels) != 1:
+        raise ValueError(
+            "the three channels must come from one capture; relative phase is "
+            f"only meaningful on a shared timebase, got {sorted(labels)!r}"
+        )
+    label = labels.pop()
+    if label not in shot.captures:
+        raise KeyError(label)
+
+    capture = shot.captures[label]
+    channel_names = [key.split(":", 1)[1] for key in names]
+    if processed:
+        # vector_at reads from a Capture, so rebuild one from the processed
+        # channels rather than silently analysing the unprocessed record.
+        rows = [processed[key].volts for key in names]
+        lengths = {len(row) for row in rows}
+        if len(lengths) != 1:
+            raise ValueError("processing left the three channels different lengths")
+        first = processed[names[0]]
+        antennas: dict[str, Antenna] = {}
+        for name, key in zip(channel_names, names, strict=True):
+            antenna = processed[key].antenna
+            if antenna is not None:
+                antennas[name] = antenna
+        capture = Capture(
+            volts=np.vstack(rows),
+            t0=first.t0,
+            dt=first.dt,
+            channel_names=tuple(channel_names),
+            antennas=antennas,
+        )
+
+    vector = vector_at(capture, frequency, channels=tuple(channel_names))
+    components = vector.lab_vector
+
+    return {
+        "data": [
+            {
+                "type": "scatter3d",
+                "mode": "lines+markers",
+                "name": f"{frequency:.4g} Hz",
+                "x": [0.0, float(components[0])],
+                "y": [0.0, float(components[1])],
+                "z": [0.0, float(components[2])],
+                "line": {"color": _colour(0), "width": 6},
+                "marker": {"size": [2, 6], "color": _colour(0)},
+                "hovertemplate": "%{x:.4g}, %{y:.4g}, %{z:.4g}<extra></extra>",
+            }
+        ],
+        "layout": _base_layout(
+            f"|v| = {vector.magnitude:.4g} at {frequency:.4g} Hz "
+            f"(ellipticity {vector.ellipticity:.2f})",
+            showlegend=False,
+            scene={
+                "xaxis": {"title": {"text": channel_names[0]}},
+                "yaxis": {"title": {"text": channel_names[1]}},
+                "zaxis": {"title": {"text": channel_names[2]}},
+                "aspectmode": "data",
+            },
+            height=460,
+        ),
+    }

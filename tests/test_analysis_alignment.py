@@ -263,3 +263,53 @@ def test_align_shot_searches_far_enough_for_mismatched_pretriggers() -> None:
 
     assert offsets["late"].correlation > 0.9
     assert offsets["late"].offset == pytest.approx(0.0, abs=1e-9)
+
+
+def test_offset_uses_the_whole_of_a_longer_spanning_record() -> None:
+    # Two instruments at the same record length but different sample rates
+    # span different durations. Truncating both to a common sample count
+    # discards the slower one's later samples -- and the feature often lives
+    # there, because a pretrigger of 0.5 puts it at the midpoint of a record
+    # that is twice as long in time.
+    n = 4096
+    fast_dt = 1e-9
+    slow_dt = 2e-9
+
+    def burst(dt: float, shift: float = 0.0) -> np.ndarray:
+        t = (np.arange(n, dtype=np.float64) - n / 2) * dt - shift
+        return np.exp(-0.5 * (t / 1e-8) ** 2)
+
+    shot = Shot()
+    shot.add(
+        "fast",
+        Capture(volts=burst(fast_dt)[None, :], t0=-n / 2 * fast_dt, dt=fast_dt),
+    )
+    shot.add(
+        "slow",
+        Capture(volts=burst(slow_dt)[None, :], t0=-n / 2 * slow_dt, dt=slow_dt),
+    )
+
+    offsets = align_shot(shot)
+
+    assert offsets["slow"].correlation > 0.7
+    assert not offsets["slow"].inverted
+    assert offsets["slow"].offset == pytest.approx(0.0, abs=2e-9)
+
+
+def test_offset_is_symmetric_for_unequal_length_records() -> None:
+    dt = 1e-9
+    long_n, short_n = 3000, 1000
+    centre = 500
+
+    def burst(n: int, index: int) -> np.ndarray:
+        t = (np.arange(n, dtype=np.float64) - index) * dt
+        return np.exp(-0.5 * (t / 1e-8) ** 2)
+
+    long_channel = make_channel(burst(long_n, centre + 250), dt=dt)
+    short_channel = make_channel(burst(short_n, centre), dt=dt, name="CH2")
+
+    forward = estimate_time_offset(long_channel, short_channel)
+    backward = estimate_time_offset(short_channel, long_channel)
+
+    assert forward.offset == pytest.approx(250 * dt, abs=dt)
+    assert backward.offset == pytest.approx(-250 * dt, abs=dt)

@@ -15,6 +15,7 @@ from figures import (
     time_figure,
     time_scale,
     transfer_figure,
+    vector_figure,
     xy_figure,
 )
 
@@ -212,3 +213,59 @@ def test_measurements_report_none_for_unsupported_timings() -> None:
     # A flat trace has no edge; JSON gets null rather than nan.
     assert row["rise_time"] is None
     assert row["fwhm"] is None
+
+
+# ---------------------------------------------------------------------------
+# Field vector
+# ---------------------------------------------------------------------------
+
+
+def make_triad_shot(components: tuple[float, float, float]) -> Shot:
+    t = np.arange(N, dtype=np.float64) * DT
+    rows = [
+        amplitude * np.sin(2.0 * np.pi * 5e7 * t) for amplitude in map(abs, components)
+    ]
+    rows = [
+        row if amplitude >= 0 else -row
+        for row, amplitude in zip(rows, components, strict=True)
+    ]
+    shot = Shot()
+    shot.add(
+        "probe",
+        Capture(
+            volts=np.vstack(rows),
+            t0=0.0,
+            dt=DT,
+            channel_names=("X", "Y", "Z"),
+        ),
+    )
+    return shot
+
+
+def test_the_vector_panel_draws_a_3d_arrow() -> None:
+    keys = ["probe:X", "probe:Y", "probe:Z"]
+    figure = vector_figure(make_triad_shot((1.0, 0.5, 0.25)), keys, 5e7)
+
+    assert figure["data"][0]["type"] == "scatter3d"
+    assert figure["data"][0]["x"][0] == 0.0  # drawn from the origin
+    assert figure["data"][0]["x"][1] == pytest.approx(1.0, rel=0.05)
+    assert figure["data"][0]["z"][1] == pytest.approx(0.25, rel=0.05)
+
+
+def test_the_vector_panel_shows_a_negative_component_pointing_the_other_way() -> None:
+    # FFT magnitudes would force this into the +++ octant.
+    keys = ["probe:X", "probe:Y", "probe:Z"]
+    figure = vector_figure(make_triad_shot((1.0, -0.5, 0.25)), keys, 5e7)
+
+    assert figure["data"][0]["y"][1] < 0
+
+
+def test_the_vector_panel_needs_exactly_three_channels() -> None:
+    with pytest.raises(ValueError, match="exactly three channels"):
+        vector_figure(make_triad_shot((1.0, 1.0, 1.0)), ["probe:X"], 5e7)
+
+
+def test_the_vector_panel_refuses_channels_from_different_captures() -> None:
+    shot = make_shot()
+    with pytest.raises(ValueError, match="must come from one capture"):
+        vector_figure(shot, ["siglent:C1", "siglent:C2", "m5i:CH0"], 1e8)

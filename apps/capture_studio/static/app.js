@@ -63,7 +63,7 @@ function channelKeys() {
 
 function fillChannelPickers() {
   const keys = channelKeys();
-  for (const id of ["chan-a", "chan-b"]) {
+  for (const id of ["chan-a", "chan-b", "chan-c"]) {
     const select = $(id);
     const previous = select.value;
     select.innerHTML = "";
@@ -75,7 +75,17 @@ function fillChannelPickers() {
     }
     if (keys.includes(previous)) select.value = previous;
     else if (id === "chan-b" && keys.length > 1) select.value = keys[1];
+    else if (id === "chan-c" && keys.length > 2) select.value = keys[2];
   }
+}
+
+function updatePairControls() {
+  const panel = $("pair-panel").value;
+  const vector = panel === "vector";
+  $("chan-c-wrap").hidden = !vector;
+  $("vector-f-wrap").hidden = !vector;
+  // A spectrogram is a single-channel view; B would be ignored.
+  $("chan-b").parentElement.hidden = panel === "spectrogram";
 }
 
 // ---------------------------------------------------------------------------
@@ -298,20 +308,27 @@ async function refreshFigures() {
 }
 
 async function refreshPairFigure() {
+  updatePairControls();
   if (!state.shot) return;
   const panel = $("pair-panel").value;
   const a = $("chan-a").value;
   const b = $("chan-b").value;
+  const c = $("chan-c").value;
   if (!a) return;
-  if (panel !== "spectrogram" && !b) return;
+
+  const query = { panel, raw: $("raw").checked, window: $("window").value };
+  if (panel === "vector") {
+    if (!b || !c) return;
+    query.channels = [a, b, c].join(",");
+    query.frequency = $("vector-f").value;
+  } else {
+    if (panel !== "spectrogram" && !b) return;
+    query.a = a;
+    query.b = b;
+  }
+
   try {
-    await drawFigure("pair-plot", {
-      panel,
-      a,
-      b,
-      raw: $("raw").checked,
-      window: $("window").value,
-    });
+    await drawFigure("pair-plot", query);
   } catch {
     /* the error is already in the status line */
   }
@@ -475,7 +492,7 @@ function wire() {
   for (const id of ["psd", "logx", "logy", "window"]) {
     $(id).addEventListener("change", refreshFigures);
   }
-  for (const id of ["pair-panel", "chan-a", "chan-b"]) {
+  for (const id of ["pair-panel", "chan-a", "chan-b", "chan-c", "vector-f"]) {
     $(id).addEventListener("change", refreshPairFigure);
   }
 
@@ -498,6 +515,14 @@ function wire() {
     await refreshMeasurements();
   });
 
+  for (const [id, format] of [["export-csv", "csv"], ["export-npz", "npz"]]) {
+    $(id).addEventListener("click", () => {
+      // A plain navigation, so the browser handles the download itself.
+      const raw = $("raw").checked;
+      window.location.href = `/api/export?format=${format}&raw=${raw}`;
+    });
+  }
+
   $("log-clear").addEventListener("click", async () => {
     await api("/api/log", { method: "DELETE" });
     $("log").textContent = "";
@@ -506,6 +531,7 @@ function wire() {
 
 async function start() {
   wire();
+  updatePairControls();
   openSocket();
 
   const processing = await api("/api/processing");

@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from config import demo_inventory, parse_inventory
+from export import export_shot
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from figures import (
     LAYOUTS,
@@ -22,6 +23,7 @@ from figures import (
     spectrogram_figure,
     time_figure,
     transfer_figure,
+    vector_figure,
     xy_figure,
 )
 from processing import ProcessingStep, step_catalog
@@ -233,7 +235,7 @@ def create_app(session: StudioSession) -> FastAPI:
     @app.get("/api/figure")
     def get_figure(
         panel: Literal[
-            "time", "fft", "spectrogram", "xy", "coherence", "transfer"
+            "time", "fft", "spectrogram", "xy", "coherence", "transfer", "vector"
         ] = "time",
         layout: LayoutMode = "overlay",
         channels: str | None = None,
@@ -244,6 +246,7 @@ def create_app(session: StudioSession) -> FastAPI:
         log_y: bool = True,
         window: str = "hann",
         max_points: int = 4000,
+        frequency: float | None = None,
         raw: bool = False,
     ) -> JSONResponse:
         if session.shot is None:
@@ -274,6 +277,7 @@ def create_app(session: StudioSession) -> FastAPI:
                 log_y=log_y,
                 window=window,
                 max_points=max_points,
+                frequency=frequency,
             )
         except KeyError as exc:
             raise HTTPException(400, f"unknown channel {exc.args[0]!r}") from exc
@@ -292,6 +296,38 @@ def create_app(session: StudioSession) -> FastAPI:
             processed=processed,
         )
         return {"rows": rows, "warnings": warnings}
+
+    @app.get("/api/export")
+    def get_export(
+        format: Literal["csv", "npz"] = "csv",
+        channels: str | None = None,
+        raw: bool = False,
+        max_points: int = 0,
+    ) -> Response:
+        """Download the current shot's traces.
+
+        PNG is deliberately absent: Plotly's own toolbar already saves the
+        figure exactly as drawn, without a headless renderer here.
+        """
+        if session.shot is None:
+            raise HTTPException(400, "no shot yet; capture or load one first")
+        processed, _ = (None, []) if raw else session.processed_channels()
+        selection = channels.split(",") if channels else None
+        try:
+            payload, media_type, filename = export_shot(
+                session.shot,
+                fmt=format,
+                channels=selection,
+                processed=processed,
+                max_points=max_points,
+            )
+        except (KeyError, ValueError) as exc:
+            raise _error(exc) from exc
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"content-disposition": f'attachment; filename="{filename}"'},
+        )
 
     # -- log and events ----------------------------------------------------
 
@@ -342,6 +378,7 @@ def _build_figure(
     log_y: bool,
     window: str,
     max_points: int,
+    frequency: float | None = None,
 ) -> dict[str, Any]:
     if panel == "time":
         return time_figure(
@@ -365,6 +402,15 @@ def _build_figure(
         if a is None:
             raise ValueError("a spectrogram needs a channel; pass 'a'")
         return spectrogram_figure(shot, a, processed=processed, window=window)
+    if panel == "vector":
+        if frequency is None:
+            raise ValueError("a field vector needs a frequency; pass 'frequency'")
+        if not selection or len(selection) != 3:
+            raise ValueError(
+                "a field vector needs exactly three channels; pass them as "
+                "'channels=a,b,c'"
+            )
+        return vector_figure(shot, selection, frequency, processed=processed)
     if a is None or b is None:
         raise ValueError(f"the {panel} panel needs two channels; pass 'a' and 'b'")
     if panel == "xy":

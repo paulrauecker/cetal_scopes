@@ -115,8 +115,11 @@ Each capture has its own clock, so they need putting on a common axis.
   window, peak annotated.
 - **Two-channel** — coherence, transfer function (gain, phase, and the
   coherence beneath them, because a transfer function has a value at every
-  frequency whether or not the channels are related there), XY, and a
-  spectrogram.
+  frequency whether or not the channels are related there), XY, a spectrogram,
+  and a **field vector**: a phase-correct 3-D arrow from three channels of one
+  capture at a chosen frequency. It uses complex amplitudes, so a component
+  pointing the other way is drawn pointing the other way — plotting three FFT
+  magnitudes instead can only ever produce an arrow in the `+++` octant.
 - **Measurements** — RMS, peak-to-peak, amplitude, rise/fall, FWHM, overshoot.
   Levels come from the waveform's histogram modes rather than min/max, so
   ringing does not read as a shorter rise time. A measurement the waveform does
@@ -125,6 +128,18 @@ Each capture has its own clock, so they need putting on a common axis.
   before display. A step that cannot run on a given channel (`b_field` without
   an antenna, say) is skipped and reported rather than failing the view, so one
   pipeline can serve a whole shot. **raw** bypasses it.
+
+## Export
+
+**Export CSV** interpolates every channel onto one common grid, since a CSV has
+a single time column and the captures do not share a sample rate; times outside
+a capture's own span are left blank rather than filled with edge values.
+**Export NPZ** keeps every channel on its own axis, so nothing is resampled and
+what you get is what was recorded.
+
+There is no PNG export button: Plotly's own toolbar already saves the figure
+exactly as drawn, so adding a headless renderer to reproduce it would buy
+nothing.
 
 ## Shots on disk
 

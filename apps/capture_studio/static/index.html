@@ -74,10 +74,15 @@
             <option value="transfer">transfer function</option>
             <option value="xy">XY</option>
             <option value="spectrogram">spectrogram (A only)</option>
+            <option value="vector">field vector (A, B, C)</option>
           </select>
         </label>
         <label>A <select id="chan-a"></select></label>
         <label>B <select id="chan-b"></select></label>
+        <label id="chan-c-wrap" hidden>C <select id="chan-c"></select></label>
+        <label id="vector-f-wrap" hidden>f (Hz)
+          <input id="vector-f" type="number" step="any" value="20000000">
+        </label>
       </div>
       <div id="pair-plot" class="plot"></div>
     </section>
@@ -107,6 +112,9 @@
         <input id="shot-path" type="text" placeholder="shots/shot001" size="28">
         <button id="shot-save">Save</button>
         <button id="shot-load">Load</button>
+        <span class="spacer"></span>
+        <button id="export-csv" title="One common time grid, since a CSV has one time column">Export CSV</button>
+        <button id="export-npz" title="Every channel on its own axis; nothing resampled">Export NPZ</button>
       </div>
       <div id="shot-meta" class="note"></div>
     </section>

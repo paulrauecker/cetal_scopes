@@ -55,9 +55,12 @@ class DemoScope(Scope):
         the capture's ``t0``. Lets a demo shot need real time alignment.
     burst_width : float, optional
         Gaussian width of the burst, in seconds. An absolute duration rather
-        than a fraction of the record, so two instruments digitizing at
-        different rates see the *same* physical event -- which is what makes
-        cross-correlating them across a demo shot meaningful.
+        than a fraction of the record, and never clamped to the sample
+        interval, so two instruments digitizing at different rates see the
+        *same* physical event -- which is what makes cross-correlating them
+        across a demo shot meaningful. Keep it well below the carrier period,
+        or the burst is a sinusoid with a soft envelope and its alignment is
+        genuinely ambiguous by half a period.
     seed : int, optional
         Seed for the additive noise.
     """
@@ -74,7 +77,7 @@ class DemoScope(Scope):
         record_length: int = 8192,
         trigger_delay: float | None = 0.05,
         skew: float = 0.0,
-        burst_width: float = 2e-8,
+        burst_width: float = 1e-8,
         acquire_timeout: float = 10.0,
         seed: int = 0,
     ) -> None:
@@ -82,6 +85,8 @@ class DemoScope(Scope):
         self._channels = tuple(channels)
         if not self._channels:
             raise ValueError("at least one channel is required")
+        if burst_width <= 0:
+            raise ValueError(f"burst_width must be positive, got {burst_width!r}")
         self._sample_rate = float(sample_rate)
         self._record_length = int(record_length)
         self._pretrigger_spec: int | float = 0.5
@@ -228,11 +233,13 @@ class DemoScope(Scope):
         # a period.
         local = t - self._skew
         # A narrow burst at the trigger gives alignment a feature to lock on
-        # to; the tone alone is ambiguous by whole periods. The width is an
-        # absolute duration, so instruments digitizing at different rates see
-        # the same event rather than differently shaped ones.
-        width = max(8.0 * dt, self._burst_width)
-        burst = np.exp(-0.5 * (local / width) ** 2)
+        # to; the carrier alone is ambiguous by whole periods, and a burst
+        # comparable to the carrier period leaves the adjacent lobe nearly as
+        # good a match as the right one. The width is an absolute duration and
+        # is *not* clamped to the sample interval: clamping would give
+        # instruments at different rates differently shaped events, which is
+        # the one thing this must not do.
+        burst = np.exp(-0.5 * (local / self._burst_width) ** 2)
         for index in range(len(self._channels)):
             frequency = self._frequency * (index + 1)
             tone = self._amplitude * np.sin(2.0 * np.pi * frequency * local)

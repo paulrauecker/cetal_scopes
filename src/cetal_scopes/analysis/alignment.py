@@ -48,8 +48,11 @@ def estimate_time_offset(
     The returned :class:`~cetal_scopes.analysis.results.TimeOffset` carries the
     seconds to add to ``signal``'s time axis to align it with ``reference``. The
     channels do not need matching sample rates, sample counts or absolute time
-    origins: both are handled by index, on the finer of the two sample
-    intervals. Each channel is mean-subtracted (and optionally linearly
+    origins: the comparison runs on the finer of the two sample intervals and
+    uses both records in full. Note that the lag is measured **by index**, not
+    against the channels' ``t0`` values -- it aligns the two records, not the
+    two time axes. To align whole captures, whose origins do differ, use
+    :func:`align_shot`, which accounts for that. Each channel is mean-subtracted (and optionally linearly
     detrended) and normalized, so the peak correlation is unitless.
 
     Parameters
@@ -76,9 +79,13 @@ def estimate_time_offset(
     ref = reference if reference.dt == dt else resample(reference, dt=dt)
     sig = signal if signal.dt == dt else resample(signal, dt=dt)
 
-    n = min(ref.n_samples, sig.n_samples)
-    a = np.asarray(ref.volts[:n], dtype=np.float64)
-    b = np.asarray(sig.volts[:n], dtype=np.float64)
+    # Both records are used in full. Truncating them to a common length --
+    # which is tempting, since it makes the lag bookkeeping trivial -- throws
+    # away the tail of whichever covers more time, and that tail routinely
+    # holds the feature: two instruments at different sample rates but the
+    # same record length span very different durations.
+    a = np.asarray(ref.volts, dtype=np.float64)
+    b = np.asarray(sig.volts, dtype=np.float64)
     a = a - a.mean()
     b = b - b.mean()
     if detrend:
@@ -88,13 +95,14 @@ def estimate_time_offset(
     b = _unit_norm(b)
 
     if max_lag is None:
-        max_lag = 0.5 * (n - 1) * dt
+        max_lag = 0.5 * (min(a.size, b.size) - 1) * dt
     if max_lag <= 0:
         raise ValueError("max_lag must be positive")
-    limit = min(round(max_lag / dt), n - 1)
 
     corr = _scipy_signal.correlate(a, b, mode="full", method="fft")
-    center = n - 1
+    # In a 'full' correlation, output index k is a lag of (k - (nb - 1)).
+    center = b.size - 1
+    limit = min(round(max_lag / dt), center, corr.size - 1 - center)
     window = np.abs(corr[center - limit : center + limit + 1])
     peak = int(np.argmax(window)) + center - limit
     peak_value = float(corr[peak])
