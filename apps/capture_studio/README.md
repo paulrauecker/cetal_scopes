@@ -328,6 +328,16 @@ neither is directly settable and both fail quietly:
 - **Trigger level.** The Siglent clamps it to roughly +/-4.5 x V/div of the
   source channel and does not say so; the summary reads it back.
 
+The **step** line is vertical resolution *measured from the samples* -- the
+smallest gap between distinct values, i.e. one ADC code in volts -- rather
+than taken from metadata, so it settles "which instrument is coarser" even
+when a driver misreports its own ADC depth:
+
+```
+  step 156 uV                                   <- 8 bits over +/-20 mV
+  step 97.7 uV, over +/-200 mV, = 4096 codes    <- 12 bits over +/-200 mV
+```
+
 A driver that records no trigger (the demo scope) simply gets no trigger line.
 `--verbose` appends every metadata key under each instrument.
 

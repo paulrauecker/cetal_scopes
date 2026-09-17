@@ -74,6 +74,8 @@ class FakeTransport:
         advance_on_query: bool = False,
         trigger_level: str = "0.00E+00",
         sample_rate: str = "2.00E+09",
+        memory_depth: str = "10k",
+        timebase: str = "1.00E-06",
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
@@ -84,6 +86,8 @@ class FakeTransport:
         self.advance_on_query = advance_on_query
         self.trigger_level = trigger_level
         self.sample_rate = sample_rate
+        self.memory_depth = memory_depth
+        self.timebase = timebase
         self.num_acq = 0
         self.opened = False
         self.closed = False
@@ -117,6 +121,10 @@ class FakeTransport:
             return self.trigger_level
         if command == ":ACQuire:SRATe?":
             return self.sample_rate
+        if command == ":ACQuire:MDEPth?":
+            return self.memory_depth
+        if command == ":TIMebase:SCALe?":
+            return self.timebase
         raise AssertionError(f"unexpected query {command!r}")
 
     def query_block(self, command: str) -> bytes:
@@ -421,6 +429,22 @@ def test_configure_rejects_an_unknown_interpolation_state() -> None:
     scope.connect()
     with pytest.raises(ValueError, match="unsupported interpolation"):
         scope.configure({"interpolation": "SOMETIMES"})
+
+
+def test_memory_depth_reads_back_the_instruments_own_label() -> None:
+    scope, fake = make_driver()
+    fake.memory_depth = "250k"
+    scope.connect()
+
+    assert scope.memory_depth() == "250k"
+
+
+def test_timebase_reads_back_seconds_per_division() -> None:
+    scope, fake = make_driver()
+    fake.timebase = "2.00E-05"
+    scope.connect()
+
+    assert scope.timebase() == pytest.approx(2e-5)
 
 
 def test_sample_rate_reads_back_what_the_scope_will_actually_use() -> None:

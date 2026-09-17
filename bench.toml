@@ -22,7 +22,11 @@ acquire_timeout = 10.0
 # sample_rate omitted on purpose: an absent rate means "as fast as this
 # instrument goes", which the driver answers (5 GS/s per channel here, and it
 # does not drop when more channels are on -- each has its own converter).
-record_length = "50us"     # a time suffix means a window: the sample count
+# 200 us, not 50: at 5 GS/s that is 1 Mpt, which lands exactly on a memory
+# depth step. 50 us needed 250 kpt, which MDEPTH_ENUM rounds *up* to 1M -- and
+# the scope then raises the rate to fill it, handing back 10 GS/s of which
+# half is reconstructed. The exact-fit windows at 5 GS/s are 2 us and 200 us.
+record_length = "200us"    # a time suffix means a window: the sample count
                            # follows the resolved rate, so a faster rate buys
                            # more samples over the same window, not less time.
                            # Write a bare number for a literal sample count.
@@ -55,7 +59,7 @@ acquire_timeout = 10.0
 # list above -- 5 GS/s with both, 10 GS/s the moment one is removed, with no
 # other edit. Because the window is fixed below, that buys twice the samples
 # over the same 50 us rather than halving the window.
-record_length = "50us"     # same window as the siglent, so the two line up
+record_length = "200us"    # same window as the siglent, so the two line up
 pretrigger = 0.5
 range = 0.2                # the card's most sensitive step; 0.2/0.5/1.0/2.5 V
 offset = 0.0

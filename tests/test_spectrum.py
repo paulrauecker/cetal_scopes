@@ -529,6 +529,18 @@ def test_acquire_writes_posttrigger_from_record_length_minus_pretrigger() -> Non
     assert card.registers[SPC_POSTTRIGGER] % 32 == 0
 
 
+def test_metadata_records_the_requested_rate_beside_the_achieved_one() -> None:
+    """Only base/2**n clocks exist, so the two can differ without warning."""
+    scope, card = make_driver()
+    scope.configure({"sample_rate": 2e9, "record_length": 128})
+    card.fake_waveform = np.zeros(128, dtype=np.int16)
+
+    capture = scope.acquire()
+
+    assert capture.metadata["sample_rate_requested_hz"] == pytest.approx(2e9)
+    assert "sample_rate_hz" in capture.metadata
+
+
 def test_acquire_timeout_stops_the_card_and_raises() -> None:
     card = FakeCard(timeout=True)
     scope = SpectrumM5i3367(card=card)

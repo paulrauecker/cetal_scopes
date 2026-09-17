@@ -87,6 +87,12 @@ Read `docs/architecture.md` before changing the data model. In short:
   `sample_width="WORD"`; `BYTE` is a lossy top-byte truncation and still carries
   the comb. Use `analysis.remove_adc_comb()` for broadband work or analyze a
   band/tone rather than the global FFT peak.
+- M5i gotcha: only `base/2**n` sample rates exist, so a requested rate in
+  between is silently rounded to the nearest divided clock (2 GS/s -> 1.25
+  GS/s with both channels on). `Capture.metadata` records
+  `sample_rate_requested_hz` beside the read-back `sample_rate_hz`; the
+  read-back is the only truth for the time axis. Likewise the pretrigger is
+  on the 32-sample grid, not just the record length -- `snap_pretrigger()`.
 - M5i gotcha: a **channel** trigger's `level` is in volts referred to that
   channel's input `range`, while the **external** (`EXT`) trigger's is in
   volts at the connector (+/-5 V). Switching `trigger.source` from `EXT` to a

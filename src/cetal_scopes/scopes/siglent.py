@@ -1118,6 +1118,19 @@ class SiglentSDS6204L(Scope):
         """
         return float(self._query(":ACQuire:SRATe?"))
 
+    def memory_depth(self) -> str:
+        """The memory depth the instrument reports, as its own label (e.g. ``1M``).
+
+        A rejected :meth:`set_memory_depth` leaves the previous value in
+        place rather than raising, so reading this back is how you find out
+        which depths the instrument actually offers.
+        """
+        return self._query(":ACQuire:MDEPth?")
+
+    def timebase(self) -> float:
+        """The timebase the instrument reports, in seconds per division."""
+        return float(self._query(":TIMebase:SCALe?"))
+
     def set_memory_depth(self, depth: str) -> None:
         """Set the maximum memory depth (e.g. ``10k``, ``1M``, ``10M``)."""
         self._write(f":ACQuire:MDEPth {depth}")
