@@ -53,6 +53,7 @@ __all__ = [
     "codes_to_volts",
     "deinterleave",
     "snap_input_range",
+    "snap_pretrigger",
     "snap_record_length",
     "snap_sample_rate",
     "volts_to_code",
@@ -168,6 +169,28 @@ def snap_sample_rate(hertz: float, *, n_channels: int) -> float:
         raise ValueError(f"sample_rate must be positive, got {hertz!r}")
     ceiling = MAX_RATE_1CH_HZ if n_channels <= 1 else MAX_RATE_2CH_HZ
     return min(hertz, ceiling)
+
+
+def snap_pretrigger(samples: int, record_length: int, step: int = MEMSIZE_STEP) -> int:
+    """Put a pretrigger count on the hardware grid, inside its legal bounds.
+
+    The card writes ``SPC_POSTTRIGGER`` and derives the pretrigger as
+    ``memsize - posttrigger``, and the manual's limits table (p. 90) gives
+    *both* a minimum of ``step`` and a step size of ``step``. Snapping the
+    record length alone is not enough: half of a 32-aligned record is only
+    32-aligned when the record is 64-aligned, so an innocuous record length
+    like 250016 produces a pretrigger of 125008 that the card rejects with
+    ``ERR_VALUE``.
+
+    Rounds *down*, so the samples it gives up go to the posttrigger -- what
+    happens after the trigger is normally the measurement.
+    """
+    snapped = (int(samples) // step) * step
+    highest = record_length - step
+    if highest <= 0:
+        # Too short to hold both; the whole record becomes posttrigger.
+        return 0
+    return max(step, min(snapped, highest))
 
 
 def snap_record_length(samples: int, step: int = MEMSIZE_STEP) -> int:
@@ -727,7 +750,10 @@ class SpectrumM5i3367(Scope):
         self._apply_common_setup()
 
         segment_length = self._record_length
-        pretrigger = pretrigger_samples(self._pretrigger_spec, segment_length)
+        pretrigger = snap_pretrigger(
+            pretrigger_samples(self._pretrigger_spec, segment_length),
+            segment_length,
+        )
         posttrigger = segment_length - pretrigger
         n_channels = len(self._channels)
 

@@ -104,6 +104,12 @@ event sits at index `record_length - posttrigger`.
   channel, 5 GS/s two) clamps down; `record_length` rounds up to the next
   32-sample step. Always read `Capture.metadata` / `Capture.dt` for what was
   actually used.
+- **The pretrigger is on the 32-sample grid too, and snapping the record
+  length is not enough.** Half of a 32-aligned record is only 32-aligned when
+  the record is 64-aligned, so `record_length = 250000` (snapped to 250016)
+  with `pretrigger = 0.5` gives 125008 -- off the grid, and the card answers
+  `ERR_VALUE` (257) at `arm()`, not at `configure()`. `snap_pretrigger()`
+  rounds it down, giving the spare samples to the posttrigger.
 - **Trigger level is relative to the current range and offset, in volts on
   the driver's side but ADC codes on the wire.** `volts_to_code` raises
   `ValueError` naming the valid range if the requested level does not fit
