@@ -237,3 +237,22 @@ def test_a_driver_that_knows_no_ceiling_leaves_the_keys_absent() -> None:
 def test_resolution_reaches_the_driver_through_build() -> None:
     spec = instrument("spectrum_m5i3367", ["CH0"]).build()
     assert spec.settings["sample_rate"] == 10e9
+
+
+def test_pretrigger_without_a_window_names_the_instrument_and_the_fix() -> None:
+    """A driver with no ceilings cannot fill the window in, so say so here."""
+    config = InstrumentConfig(
+        label="demo1", driver="demo", channels=["CH1"], settings={"pretrigger": 0.5}
+    )
+    with pytest.raises(ValueError, match="demo1: 'pretrigger' needs a window"):
+        config.resolved_settings()
+
+
+def test_pretrigger_is_fine_when_the_driver_fills_the_window_in() -> None:
+    config = InstrumentConfig(
+        label="siglent",
+        driver="siglent_sds6204l",
+        channels=["C1"],
+        settings={"pretrigger": 0.5},
+    )
+    assert config.resolved_settings()["sample_rate"] == 5e9
