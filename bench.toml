@@ -1,0 +1,57 @@
+# The bench: an M5i.3367 digitiser on PCIe and an SDS6204L on the network.
+# Load it with:  uv run apps/capture_studio/capture_studio.py --config bench.toml
+
+poll_interval = 0.2        # how finely the trigger wait is sliced (abort latency)
+default_timeout = 10.0
+arm_timeout = 5.0
+
+# --- Siglent SDS6204L, 192.168.5.171 ---------------------------------------
+
+[[instrument]]
+label = "siglent"
+driver = "siglent_sds6204l"
+address = "192.168.5.171"
+channels = ["C1", "C2", "C3", "C4"]
+timeout = 10.0
+
+[instrument.options]
+timeout = 5.0              # socket timeout for SCPI commands
+acquire_timeout = 10.0
+
+[instrument.settings]
+sample_rate = 2.0e9        # the front end is trusted to 2 GHz, not to Nyquist
+record_length = 100000     # 50 us at 2 GS/s
+pretrigger = 0.5
+range = 1.0                # volts full-scale
+offset = 0.0
+coupling = "DC"
+impedance = 50.0
+
+[instrument.settings.trigger]
+source = "C1"              # or "EX" / "EX5" for the external input
+level = 0.2                # clamps to about +/-4.5 * V/div of the source
+slope = "RISing"
+
+# --- Spectrum M5i.3367 over PCIe -------------------------------------------
+
+[[instrument]]
+label = "m5i"
+driver = "spectrum_m5i3367"
+address = "/dev/spcm0"
+channels = ["CH0", "CH1"]
+timeout = 10.0
+
+[instrument.options]
+acquire_timeout = 10.0
+
+[instrument.settings]
+sample_rate = 5.0e9        # ceiling with both channels on (10 GS/s with one)
+record_length = 262144     # must be a multiple of 32; 52 us at 5 GS/s
+pretrigger = 0.5
+range = 1.0                # snaps up to 0.2 / 0.5 / 1.0 / 2.5 V full-scale
+offset = 0.0
+
+[instrument.settings.trigger]
+source = "EXT"             # the card's Ext0 "Trig In"; or "CH0" / "CH1"
+level = 1.5                # volts at the connector, within +/-5 V
+slope = "RISing"
