@@ -38,6 +38,7 @@ from cetal_scopes.scopes.spectrum import (
     codes_to_volts,
     deinterleave,
     snap_input_range,
+    snap_pretrigger,
     snap_record_length,
     snap_sample_rate,
     volts_to_code,
@@ -177,6 +178,30 @@ class TestSnapRecordLength:
     def test_rejects_nonpositive(self) -> None:
         with pytest.raises(ValueError, match="positive"):
             snap_record_length(0)
+
+
+class TestSnapPretrigger:
+    def test_already_on_grid(self) -> None:
+        assert snap_pretrigger(131072, 262144) == 131072
+
+    def test_half_of_a_32_aligned_record_can_be_off_grid(self) -> None:
+        """The case that made the card answer ERR_VALUE: 250016 // 2 = 125008."""
+        assert 125008 % 32 != 0
+        pretrigger = snap_pretrigger(125008, 250016)
+        assert pretrigger % 32 == 0
+        assert (250016 - pretrigger) % 32 == 0
+
+    def test_rounds_down_so_the_posttrigger_keeps_the_samples(self) -> None:
+        assert snap_pretrigger(125008, 250016) == 124992
+
+    def test_clamps_to_the_minimum(self) -> None:
+        assert snap_pretrigger(0, 4096) == 32
+
+    def test_leaves_room_for_a_posttrigger(self) -> None:
+        assert snap_pretrigger(4096, 4096) == 4064
+
+    def test_a_record_too_short_to_split_is_all_posttrigger(self) -> None:
+        assert snap_pretrigger(16, 32) == 0
 
 
 class TestDeinterleave:
@@ -497,7 +522,11 @@ def test_acquire_writes_posttrigger_from_record_length_minus_pretrigger() -> Non
 
     scope.acquire()
 
-    assert card.registers[SPC_POSTTRIGGER] == 88
+    # 40 is not on the 32-sample grid, so it snaps down to 32 and the four
+    # samples it gives up go to the posttrigger. Writing the unsnapped 88
+    # here is what the card answers ERR_VALUE to.
+    assert card.registers[SPC_POSTTRIGGER] == 96
+    assert card.registers[SPC_POSTTRIGGER] % 32 == 0
 
 
 def test_acquire_timeout_stops_the_card_and_raises() -> None:
