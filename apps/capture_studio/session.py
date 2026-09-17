@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from config import Inventory, build_specs, save_inventory
 from processing import ProcessingStep, apply_pipeline, pipeline_to_metadata
 
@@ -25,6 +26,7 @@ from cetal_scopes.acquisition import (
 )
 from cetal_scopes.analysis import align_shot
 from cetal_scopes.analysis.results import TimeOffset
+from cetal_scopes.capture import Capture
 from cetal_scopes.channel import Channel
 from cetal_scopes.shot import Shot
 from cetal_scopes.storage import load_shot, save_shot
@@ -74,6 +76,56 @@ def _asked_vs_got(actual: float | None, asked: float | None, unit: str) -> str:
     if _differs(actual, asked, 0.0025):
         return f"{got} (asked {_eng(asked, unit)})"
     return got
+
+
+#: Samples per channel used to measure the quantisation step. The step is the
+#: smallest gap between distinct values, so a slice is as good as the whole
+#: record and far cheaper to sort.
+_STEP_SAMPLE_LIMIT = 100_000
+
+
+def _quantisation_step(capture: Capture) -> tuple[float, float] | None:
+    """Smallest and largest volts-per-code across a capture's channels.
+
+    Measured from the data rather than taken from metadata: it is the honest
+    answer to "which instrument is coarser", and it holds even when a driver
+    misreports its own ADC depth. Returns ``None`` when nothing can be
+    measured -- a constant channel has no two distinct values to compare.
+    """
+    steps: list[float] = []
+    values = np.asarray(capture.volts, dtype=np.float64)
+    for row in np.atleast_2d(values):
+        unique = np.unique(row[:_STEP_SAMPLE_LIMIT])
+        if unique.size < 2:
+            continue
+        gaps = np.diff(unique)
+        positive = gaps[gaps > 0]
+        if positive.size:
+            steps.append(float(positive.min()))
+    if not steps:
+        return None
+    return min(steps), max(steps)
+
+
+def _resolution_line(capture: Capture, metadata: Mapping[str, Any]) -> str | None:
+    """Vertical resolution: the measured step, and the span it divides."""
+    measured = _quantisation_step(capture)
+    if measured is None:
+        return None
+    low, high = measured
+    step = (
+        _eng(low, "V", 3)
+        if low == high
+        else f"{_eng(low, 'V', 3)}-{_eng(high, 'V', 3)}"
+    )
+    parts = [f"step {step}"]
+    range_mv = metadata.get("channel_range_mv")
+    if isinstance(range_mv, Mapping) and range_mv:
+        span = max(float(v) for v in range_mv.values()) / 1000.0
+        parts.append(f"over +/-{_eng(span, 'V', 3)}")
+        if low > 0:
+            parts.append(f"= {2 * span / low:.0f} codes")
+    return "  " + ", ".join(parts)
 
 
 def _trigger_line(metadata: Mapping[str, Any]) -> str | None:
@@ -144,6 +196,10 @@ def summarize_shot(shot: Shot, *, verbose: bool = False) -> list[str]:
         if metadata.get("memory_depth") is not None:
             detail.append(f"depth {metadata['memory_depth']}")
         lines.append("  " + ", ".join(detail))
+
+        resolution = _resolution_line(capture, metadata)
+        if resolution is not None:
+            lines.append(resolution)
 
         trigger = _trigger_line(metadata)
         if trigger is not None:

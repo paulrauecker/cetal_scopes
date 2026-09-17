@@ -473,6 +473,7 @@ class SpectrumM5i3367(Scope):
         self._max_adc = 0
         self._bytes_per_sample = 2
         self._actual_sample_rate = 0.0
+        self._sample_rate_requested: float | None = None
 
         self._sample_rate: float = 1e6
         self._record_length: int = 4096
@@ -599,7 +600,15 @@ class SpectrumM5i3367(Scope):
         self._channels = names
 
     def set_sample_rate(self, hertz: float) -> None:
-        """Request a sample rate in Hz, clamped to the channel-count ceiling."""
+        """Request a sample rate in Hz, clamped to the channel-count ceiling.
+
+        Clamping is not the only thing between this and the clock the card
+        runs: only ``base / 2**n`` rates exist (manual p. 97), so a rate in
+        between is rounded to the nearest divided clock. The request is kept
+        alongside the read-back so a capture can show both -- asking for
+        2 GS/s and getting 1.25 GS/s is otherwise invisible.
+        """
+        self._sample_rate_requested = float(hertz)
         self._sample_rate = snap_sample_rate(hertz, n_channels=len(self._channels))
 
     def set_record_length(self, samples: int) -> None:
@@ -1047,6 +1056,9 @@ class SpectrumM5i3367(Scope):
             "product_name": self._product_name,
             "serial_number": self._serial,
             "sample_rate_hz": self._actual_sample_rate,
+            # What was asked for, so the gap the clock divider opens up is
+            # visible: only base/2**n rates exist, so 2 GS/s becomes 1.25.
+            "sample_rate_requested_hz": self._sample_rate_requested,
             "record_length": record_length,
             "pretrigger": pretrigger,
             "posttrigger": record_length - pretrigger,

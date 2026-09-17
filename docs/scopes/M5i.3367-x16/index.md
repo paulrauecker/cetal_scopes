@@ -104,6 +104,14 @@ event sits at index `record_length - posttrigger`.
   channel, 5 GS/s two) clamps down; `record_length` rounds up to the next
   32-sample step. Always read `Capture.metadata` / `Capture.dt` for what was
   actually used.
+- **Only `base / 2**n` sample rates exist** (manual p. 97), so a rate in
+  between is silently rounded to the nearest divided clock. With both
+  channels on, that is 5 / 2.5 / 1.25 / 0.625 GS/s -- a "round" 2 GS/s is
+  *not* reachable and lands on 1.25 GS/s, a 1.6x coarser time axis than the
+  Siglent gives for the same request. Prefer a ladder rate, or leave
+  `sample_rate` out entirely so the ceiling (always a ladder rate) is used.
+  `Capture.metadata` carries `sample_rate_requested_hz` beside
+  `sample_rate_hz` so the gap is visible.
 - **The pretrigger is on the 32-sample grid too, and snapping the record
   length is not enough.** Half of a 32-aligned record is only 32-aligned when
   the record is 64-aligned, so `record_length = 250000` (snapped to 250016)

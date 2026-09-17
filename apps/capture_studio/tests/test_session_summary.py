@@ -84,3 +84,58 @@ def test_verbose_adds_every_metadata_key() -> None:
     shot = make_shot(memory_depth="1M")
     assert "memory_depth = '1M'" not in "\n".join(summarize_shot(shot))
     assert "memory_depth = '1M'" in "\n".join(summarize_shot(shot, verbose=True))
+
+
+# --- vertical resolution, measured rather than claimed ----------------------
+
+
+def quantised_capture(span: float, codes: int, **metadata: object) -> Capture:
+    t = np.arange(4096) * 2e-10
+    signal = 0.0008 * np.sin(2 * np.pi * 3e7 * t)
+    lsb = 2 * span / codes
+    base: dict[str, object] = {"instrument": "test"}
+    base.update(metadata)
+    return Capture(
+        volts=np.vstack([np.round(signal / lsb) * lsb] * 2),
+        t0=0.0,
+        dt=2e-10,
+        channel_names=("A", "B"),
+        metadata=base,
+    )
+
+
+def summary_of_capture(capture: Capture) -> str:
+    shot = Shot()
+    shot.add("x", capture)
+    return "\n".join(summarize_shot(shot))
+
+
+def test_the_measured_step_is_the_adc_code_size() -> None:
+    """8 bits over +/-20 mV is 156 uV per code."""
+    assert "step 156 uV" in summary_of_capture(quantised_capture(0.02, 256))
+
+
+def test_more_bits_over_the_same_span_measure_finer() -> None:
+    coarse = summary_of_capture(quantised_capture(0.2, 256))
+    fine = summary_of_capture(quantised_capture(0.2, 4096))
+    assert "step 1.56 mV" in coarse
+    assert "step 97.7 uV" in fine
+
+
+def test_the_code_count_is_reported_when_the_range_is_known() -> None:
+    text = summary_of_capture(
+        quantised_capture(0.2, 4096, channel_range_mv={"A": 200, "B": 200})
+    )
+    assert "over +/-200 mV" in text
+    assert "= 4096 codes" in text
+
+
+def test_a_constant_channel_reports_no_step_rather_than_guessing() -> None:
+    capture = Capture(
+        volts=np.zeros((1, 64)),
+        t0=0.0,
+        dt=1e-9,
+        channel_names=("A",),
+        metadata={"instrument": "test"},
+    )
+    assert "step" not in summary_of_capture(capture)
