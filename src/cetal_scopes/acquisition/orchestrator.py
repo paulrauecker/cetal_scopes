@@ -18,7 +18,7 @@ bounds how much of a shot's jitter comes from the arming itself.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -189,16 +189,41 @@ class MultiScopeAcquisition:
         raise KeyError(label)
 
     async def open(self) -> None:
-        """Connect and configure every instrument, concurrently."""
-        await asyncio.gather(*(scope.connect() for scope in self._scopes.values()))
+        """Connect and configure every instrument, concurrently.
+
+        A failure is re-raised naming the instrument that caused it. Without
+        the label, a bench of several scopes reports a settings error with no
+        way to tell whose setting it was.
+        """
         await asyncio.gather(
             *(
-                self._scopes[spec.label].configure(spec.settings)
+                self._labelled(spec.label, self._scopes[spec.label].connect())
+                for spec in self._specs
+            )
+        )
+        await asyncio.gather(
+            *(
+                self._labelled(
+                    spec.label, self._scopes[spec.label].configure(spec.settings)
+                )
                 for spec in self._specs
                 if spec.settings
             )
         )
         self._opened = True
+
+    @staticmethod
+    async def _labelled(label: str, awaitable: Awaitable[None]) -> None:
+        """Await ``awaitable``, prefixing any failure with ``label``."""
+        try:
+            await awaitable
+        except Exception as exc:
+            message = f"{label}: {exc}"
+            try:
+                relabelled: Exception = type(exc)(message)
+            except Exception:  # noqa: BLE001 - any exception that will not rebuild
+                relabelled = RuntimeError(message)
+            raise relabelled from exc
 
     async def aclose(self) -> None:
         """Abort anything in flight, then close every instrument."""

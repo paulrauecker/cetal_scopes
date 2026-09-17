@@ -44,10 +44,11 @@ There is no authentication in the app -- put it behind one.
 A run is defined by a TOML file rather than by whatever was typed into a form,
 so a bench setup is reproducible and reviewable. The **Instruments** panel
 edits that same structure: sample rate, record length, pretrigger, range,
-offset, coupling, impedance and the trigger get their own fields, and anything
-else the driver accepts -- panel-native keys like Siglent's `timebase`, or the
-per-channel mapping form of `range` -- stays in the JSON boxes beside them,
-rather than being flattened into a single number it is not.
+offset, coupling, impedance, the trigger and a per-channel **V/div** get their
+own fields, and anything else the driver accepts -- panel-native keys like
+Siglent's `timebase`, or the per-channel mapping form of `range` -- stays in
+the JSON boxes beside them, rather than being flattened into a single number it
+is not.
 
 - **Apply** hands the setup to the session. It disconnects the instruments,
   since which instruments exist may have changed; the next **Capture shot**
@@ -92,6 +93,29 @@ source = "EXT"            # the card's Ext0 "Trig In"
 level = 1.5
 slope = "RISing"
 ```
+
+### V/div, or `range`
+
+The same vertical setting has two spellings, and which you get depends on the
+driver:
+
+- `range` is the shared, SI one: volts **full-scale**, so the channel spans
+  `±range`. Every driver takes it.
+- `vertical.<channel>.scale` is the Siglent's panel one: volts **per
+  division**. With its 8 divisions, `range = 4 × V/div` — `range = 1.0` is
+  `0.25 V/div`, and the instrument snaps up its own 1-2-5 ladder from there.
+  `vertical` also carries that channel's `probe`, `bandwidth_limit`, `offset`,
+  `coupling` and `impedance`; the editor writes `scale` and leaves the rest of
+  what the file holds alone.
+
+Because both write the same setting, the driver **rejects being given both for
+one channel** — there is no honest precedence rule between them. So the editor
+offers one or the other: typing a V/div clears that instrument's `range`, and
+typing a `range` clears the V/div fields. A hand-edited TOML that sets both
+is accepted by the inventory and fails at **Connect**, where `configure()` runs.
+
+Drivers with no panel vertical vocabulary (the M5i) show no V/div field and
+take `range` alone.
 
 `settings` goes straight to the driver's `configure()`, so it takes the shared
 physical vocabulary (`sample_rate`, `record_length`, `pretrigger`, `range`,
@@ -149,6 +173,14 @@ differently.
   row per channel. Stacked rows share the x-axis, so zoom moves them together.
   Long records are drawn through a min/max envelope, so a one-sample spike
   survives decimation instead of being aliased away.
+  **Zooming re-fetches.** The visible span is sent back to the server and the
+  drawing budget is spent on *that* span, so zooming in recovers real samples
+  rather than magnifying the ones already sent — down to every sample once the
+  window holds fewer than the budget. The note beside **Reset zoom** says which
+  you are looking at (`every sample drawn (full rate)` or `262144 samples →
+  4000 drawn (min/max envelope)`). The time unit is fixed by the whole record
+  and does not change as you zoom, because the browser converts axis
+  coordinates back to seconds with it.
   The **Channels** row toggles which channels the traces and the spectrum draw;
   it is a display filter only, so processing, measurements and export still see
   the whole shot. Channels of a later shot arrive visible.
@@ -156,6 +188,18 @@ differently.
   window, peak annotated. Follows the Traces panel's channel toggles.
   **Detail** sets the points drawn per trace (see *Drawing cost* below); the
   annotated peak is measured on the full spectrum, before any binning.
+  **f min** / **f max** bound the band drawn, in Hz — blank means DC and the
+  Nyquist frequency of the fastest capture. The limits are applied *before*
+  the drawing budget, so narrowing to a band spends the whole budget inside
+  it: zooming in buys resolution rather than showing a binned slice of the
+  full span.
+  **dB** shows the spectrum in dB relative to one unit of whatever the
+  channels are in — `dB re 1 V` for volts, and the axis says so. A PSD is
+  already a power quantity, so it converts at `10 log10` where an amplitude
+  converts at `20 log10`. A dB axis is already logarithmic, so **log y** does
+  not apply and is greyed out. A dead channel (all zeros) is floored at
+  -400 dB rather than running to negative infinity and dragging the shared
+  autoscaled axis down with it.
 - **Two-channel** — coherence, transfer function (gain, phase, and the
   coherence beneath them, because a transfer function has a value at every
   frequency whether or not the channels are related there), XY, a spectrogram,
@@ -207,6 +251,11 @@ it.
 
 ## Notes
 
+- **Full fidelity is a window away, not a setting.** Nothing the browser is
+  given is ever more than the budget, so the answer to "am I seeing every
+  sample" is always "in this window, yes or no", and the Traces panel says
+  which. The recorded record is never modified: measurements, the FFT,
+  alignment and both exports always run on all of it.
 - **Drawing cost.** A figure is binned to a drawing budget before it is sent:
   time traces through a min/max envelope, spectra through the same envelope on
   geometric bins when the axis is logarithmic, so a narrow spur keeps its full

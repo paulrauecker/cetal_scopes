@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
 
-from config import demo_inventory, parse_inventory
+from config import VERTICAL_DRIVERS, demo_inventory, parse_inventory
 from export import export_shot
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -141,6 +141,8 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
         return {
             "inventory": session.inventory.model_dump(),
             "drivers": sorted(DRIVERS),
+            # Which drivers can be given a panel V/div, and what they snap to.
+            "vertical_drivers": VERTICAL_DRIVERS,
             "config_path": str(session.config_path) if session.config_path else None,
         }
 
@@ -280,6 +282,11 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
         psd: bool = False,
         log_x: bool = True,
         log_y: bool = True,
+        db: bool = False,
+        f_min: float | None = None,
+        f_max: float | None = None,
+        t_min: float | None = None,
+        t_max: float | None = None,
         window: str = "hann",
         max_points: int = 4000,
         frequency: float | None = None,
@@ -317,6 +324,12 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
                 psd=psd,
                 log_x=log_x,
                 log_y=log_y,
+                db=db,
+                f_min=f_min,
+                f_max=f_max,
+                t_min=t_min,
+                t_max=t_max,
+                revision=session.status.shot_id,
                 window=window,
                 max_points=max_points,
                 frequency=frequency,
@@ -421,6 +434,12 @@ def _build_figure(
     log_y: bool,
     window: str,
     max_points: int,
+    db: bool = False,
+    f_min: float | None = None,
+    f_max: float | None = None,
+    t_min: float | None = None,
+    t_max: float | None = None,
+    revision: str | None = None,
     frequency: float | None = None,
 ) -> dict[str, Any]:
     if panel == "time":
@@ -430,6 +449,9 @@ def _build_figure(
             channels=selection,
             processed=processed,
             max_points=max_points,
+            t_min=t_min,
+            t_max=t_max,
+            revision=revision,
         )
     if panel == "fft":
         return fft_figure(
@@ -440,6 +462,9 @@ def _build_figure(
             psd=psd,
             log_x=log_x,
             log_y=log_y,
+            db=db,
+            f_min=f_min,
+            f_max=f_max,
             max_points=max_points,
         )
     if panel == "spectrogram":

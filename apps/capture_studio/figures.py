@@ -38,8 +38,10 @@ __all__ = [
     "measurement_table",
     "spectrogram_figure",
     "time_figure",
+    "to_decibels",
     "transfer_figure",
     "vector_figure",
+    "window_samples",
     "xy_figure",
 ]
 
@@ -157,6 +159,28 @@ def _iter_channels(
         yield key, label, channel
 
 
+def window_samples(
+    channel: Channel, t_min: float | None, t_max: float | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the ``(times, values)`` of ``channel`` inside ``[t_min, t_max]``.
+
+    Index arithmetic rather than a mask: the channel's time axis is derived
+    (``t0 + arange(n) * dt``), so the bounds resolve to a slice without
+    materialising the whole axis to compare against.
+
+    An empty slice is a legitimate answer -- it means this channel does not
+    reach into the requested window, which happens whenever captures with
+    different pretriggers are zoomed into one instrument's region.
+    """
+    n = channel.n_samples
+    first = 0 if t_min is None else int(np.ceil((t_min - channel.t0) / channel.dt))
+    last = n if t_max is None else int(np.floor((t_max - channel.t0) / channel.dt)) + 1
+    first = max(0, min(first, n))
+    last = max(first, min(last, n))
+    times = channel.t0 + np.arange(first, last, dtype=np.float64) * channel.dt
+    return times, np.asarray(channel.volts[first:last], dtype=np.float64)
+
+
 def time_figure(
     shot: Shot,
     *,
@@ -164,6 +188,9 @@ def time_figure(
     channels: Sequence[str] | None = None,
     processed: dict[str, Channel] | None = None,
     max_points: int = 4000,
+    t_min: float | None = None,
+    t_max: float | None = None,
+    revision: str | None = None,
 ) -> dict[str, Any]:
     """Draw the time-domain traces in one of the three layouts.
 
@@ -183,11 +210,25 @@ def time_figure(
     max_points : int, optional
         Per-trace drawing budget. Traces are reduced with a min/max envelope,
         so narrow transients survive.
+    t_min, t_max : float, optional
+        Bound the drawn span, in seconds on the aligned axis. Applied
+        *before* the budget, so a zoomed-in window spends the whole budget on
+        itself: once the window holds no more samples than the budget, every
+        sample is drawn and the trace is at full rate.
+    revision : str, optional
+        Identifies the data behind the figure, usually the shot id. Plotly
+        keeps the user's pan and zoom while it is unchanged -- which is what
+        lets a zoom re-fetch its own window without the view jumping -- and
+        resets the view when it changes, so a new shot is not shown through
+        the last one's window.
 
     Returns
     -------
     dict
-        A Plotly figure specification.
+        A Plotly figure specification. Its ``layout.meta`` carries the time
+        scale in use, the window, and whether any trace was decimated, so the
+        browser can convert axis coordinates back to seconds and say what it
+        is showing.
     """
     selected = list(_iter_channels(shot, channels))
     if not selected:
@@ -208,18 +249,28 @@ def time_figure(
     else:
         groups = [("", resolved)]
 
+    # The unit comes from the *whole* record, never from the zoom window: a
+    # unit that changed as you zoomed would silently redefine the numbers on
+    # the axis mid-gesture, and the browser converts those numbers back to
+    # seconds to ask for the next window.
     span = max((channel.n_samples - 1) * channel.dt for _, _, channel in resolved)
     scale, unit = time_scale(span)
 
     data: list[dict[str, Any]] = []
     figure_layout = _base_layout("")
     n_rows = len(groups)
+    order = [item[0] for item in resolved]
+    in_window = 0
+    drawn = 0
 
     for row, (group_name, members) in enumerate(groups, start=1):
         axis = "" if row == 1 else str(row)
         for key, _, channel in members:
-            index = [item[0] for item in resolved].index(key)
-            t, values = decimate_envelope(channel.time, channel.volts, max_points)
+            index = order.index(key)
+            times, volts = window_samples(channel, t_min, t_max)
+            in_window = max(in_window, int(times.size))
+            t, values = decimate_envelope(times, volts, max_points)
+            drawn = max(drawn, int(t.size))
             data.append(
                 {
                     "type": "scattergl",
@@ -264,6 +315,19 @@ def time_figure(
             "ygap": 0.28,
         }
         figure_layout["height"] = max(300, 190 * n_rows) + 40
+
+    if revision is not None:
+        figure_layout["uirevision"] = revision
+    figure_layout["meta"] = {
+        "time_scale": scale,
+        "time_unit": unit,
+        "t_min": t_min,
+        "t_max": t_max,
+        "samples_in_window": in_window,
+        "drawn_points": drawn,
+        # False means every sample in the window reached the browser.
+        "decimated": drawn < in_window,
+    }
     return {"data": data, "layout": figure_layout}
 
 
@@ -380,6 +444,35 @@ def _unit_of(members: Sequence[tuple[str, str, Channel]]) -> str:
     return units.pop() if len(units) == 1 else "value"
 
 
+#: A spectrum bin of exactly zero has no dB value, and a record with a flat
+#: stretch produces them. Each trace is floored this far below its own peak,
+#: which is past anything a real measurement resolves.
+DB_FLOOR_RATIO = 1e-10
+
+#: Absolute floor for the converted values. A dead channel -- all zeros, a
+#: disconnected input -- would otherwise land thousands of dB down and drag
+#: the shared autoscaled y-axis with it, squashing every real trace on the
+#: panel into a line.
+DB_MIN = -400.0
+
+
+def to_decibels(values: np.ndarray, *, power: bool) -> np.ndarray:
+    """Convert a spectrum to dB relative to one unit of whatever it is in.
+
+    ``power`` selects the factor: a PSD is already a power quantity
+    (``10 log10``), an amplitude is not (``20 log10``). Getting this wrong
+    halves or doubles every number on the axis, which is why it is a
+    parameter rather than a constant.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    peak = float(np.max(array)) if array.size else 0.0
+    if peak <= 0.0:
+        return np.full(array.shape, DB_MIN, dtype=np.float64)
+    factor = 10.0 if power else 20.0
+    converted = factor * np.log10(np.maximum(array, peak * DB_FLOOR_RATIO))
+    return np.maximum(converted, DB_MIN)
+
+
 def fft_figure(
     shot: Shot,
     *,
@@ -389,12 +482,21 @@ def fft_figure(
     psd: bool = False,
     log_x: bool = True,
     log_y: bool = True,
+    db: bool = False,
     f_min: float | None = None,
     f_max: float | None = None,
     annotate_peak: bool = True,
     max_points: int = 3000,
 ) -> dict[str, Any]:
     """One-sided spectrum of every selected channel, on shared axes.
+
+    ``f_min`` and ``f_max`` bound the drawn band. They are applied *before*
+    the drawing budget, so narrowing to a band spends the whole budget on
+    that band rather than showing a binned slice of the full span.
+
+    ``db`` converts to dB relative to one unit of whatever the channels are
+    in, and then a logarithmic y-axis would be a log of a log, so ``log_y``
+    is ignored.
 
     ``max_points`` is the per-trace drawing budget; see
     :func:`decimate_spectrum` for what it does and why it is not optional in
@@ -407,6 +509,7 @@ def fft_figure(
 
     data: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
+    units: set[str] = set()
     for index, (key, _, recorded) in enumerate(selected):
         channel = (processed or {}).get(key, recorded)
         if channel.n_samples < 2:
@@ -414,6 +517,9 @@ def fft_figure(
         spectrum = _fft(channel, window=window)
         freq = spectrum.freq
         values = spectrum.psd if psd else spectrum.amplitude
+        units.add(channel.unit)
+        if db:
+            values = to_decibels(values, power=psd)
 
         mask = freq > 0 if log_x else np.ones(freq.shape, dtype=bool)
         if f_min is not None:
@@ -464,7 +570,6 @@ def fft_figure(
     if not data:
         return empty_figure("Nothing in the selected frequency range.")
 
-    unit = "PSD" if psd else "amplitude"
     return {
         "data": data,
         "layout": _base_layout(
@@ -473,10 +578,33 @@ def fft_figure(
                 "title": {"text": "frequency (Hz)"},
                 "type": "log" if log_x else "linear",
             },
-            yaxis={"title": {"text": unit}, "type": "log" if log_y else "linear"},
+            yaxis={
+                "title": {"text": _spectrum_axis_title(units, psd=psd, db=db)},
+                # dB is already logarithmic; a log axis on top of it would be
+                # a log of a log.
+                "type": "log" if (log_y and not db) else "linear",
+            },
             annotations=annotations,
         ),
     }
+
+
+def _spectrum_axis_title(units: set[str], *, psd: bool, db: bool) -> str:
+    """Name the y-axis, including its dB reference when there is one.
+
+    The unit comes from the channels themselves rather than from
+    ``Spectrum.amplitude_unit``, which :func:`cetal_scopes.analysis.fft` does
+    not currently set from the channel -- so a pipeline that turned volts into
+    teslas would otherwise be labelled volts. Channels of different units
+    overlaid on one axis have no single unit to name, so none is claimed.
+    """
+    unit = next(iter(units)) if len(units) == 1 else None
+    if db:
+        reference = f" re 1 {unit}{'^2/Hz' if psd and unit else ''}" if unit else ""
+        return f"dB{reference}"
+    if psd:
+        return f"PSD ({unit}^2/Hz)" if unit else "PSD"
+    return f"amplitude ({unit})" if unit else "amplitude"
 
 
 def spectrogram_figure(

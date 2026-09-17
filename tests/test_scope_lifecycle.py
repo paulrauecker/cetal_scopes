@@ -445,9 +445,10 @@ def test_spectrum_external_trigger_rejects_an_out_of_range_level() -> None:
 
 
 def test_spectrum_unknown_trigger_source_names_the_external_option() -> None:
-    scope, card = make_spectrum(channels=("CH0",))
-    scope.configure({"record_length": 32, "trigger": {"source": "CH1"}})
-    _waveform(card, 32)
+    # Reported by configure(), not by acquire(): one instrument failing to
+    # arm takes a whole multi-instrument shot down with it, so a trigger that
+    # cannot be realised must be caught where the setting was made.
+    scope, _ = make_spectrum(channels=("CH0",))
 
     with pytest.raises(ValueError, match="external source"):
-        scope.acquire()
+        scope.configure({"record_length": 32, "trigger": {"source": "CH1"}})

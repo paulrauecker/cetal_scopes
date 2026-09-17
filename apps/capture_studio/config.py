@@ -16,8 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cetal_scopes.acquisition import InstrumentSpec
 from cetal_scopes.scopes.registry import DRIVERS, create_scope
+from cetal_scopes.scopes.siglent import VDIV_LADDER
 
 __all__ = [
+    "VERTICAL_DRIVERS",
     "InstrumentConfig",
     "Inventory",
     "build_specs",
@@ -27,6 +29,17 @@ __all__ = [
     "parse_inventory",
     "save_inventory",
 ]
+
+#: Drivers whose ``configure()`` takes a per-channel ``vertical`` mapping, so
+#: a channel can be given a true panel V/div instead of the SI ``range``, plus
+#: the V/div ladder that driver snaps to. The two spellings write the same
+#: instrument setting, and the driver rejects being given both for one channel
+#: -- there is no honest precedence rule between them -- so the UI offers one
+#: or the other per channel, never both. Drivers with no panel vertical
+#: vocabulary (the M5i) are simply absent, and take ``range`` alone.
+VERTICAL_DRIVERS: dict[str, dict[str, Any]] = {
+    "siglent_sds6204l": {"vdiv_ladder": list(VDIV_LADDER), "divisions": 8},
+}
 
 
 class _Model(BaseModel):

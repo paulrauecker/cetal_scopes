@@ -227,7 +227,11 @@ def volts_to_code(
         raise ValueError(
             f"trigger level {level_v:g} V is outside the +/-{range_v:g} V "
             f"input range at offset {offset_v:g} V; expected a level in "
-            f"[{-range_v - offset_v:g}, {range_v - offset_v:g}] V"
+            f"[{-range_v - offset_v:g}, {range_v - offset_v:g}] V. A channel "
+            f"trigger's level is referred to that channel's input range, "
+            f"unlike an external trigger's, which is referred to the "
+            f"connector (+/-{EXT0_LEVEL_LIMIT_MV / 1000:g} V) -- so a level "
+            f"carried over from an external source is often out of range here"
         )
     return round(code)
 
@@ -543,6 +547,10 @@ class SpectrumM5i3367(Scope):
                 slope=physical.trigger.slope,
             )
 
+        # Ranges and trigger are both in now, so the one cross-check between
+        # them can be made here rather than at arm() time.
+        self.validate_trigger()
+
         if "segments" in settings:
             self.set_segments(settings["segments"])
 
@@ -616,6 +624,61 @@ class SpectrumM5i3367(Scope):
             level=level if level is not None else self._trigger.level,
             slope=slope if slope is not None else self._trigger.slope,
         )
+
+    def _resolve_channel_trigger(self) -> tuple[int, int, int]:
+        """Resolve a channel trigger to ``(index, slope mode, level code)``.
+
+        Pure arithmetic over settings the card already holds, so it can be run
+        to *validate* a configuration long before any register is written.
+
+        Raises
+        ------
+        ValueError
+            If the source is not one of the acquired channels, the slope is
+            not a known spelling, or the level is outside that channel's
+            input range.
+        """
+        channel = self._trigger.source
+        if channel not in self._channels:
+            raise ValueError(
+                f"trigger source {channel!r} is not one of the acquired "
+                f"channels {self._channels!r} and is not an external "
+                f"source {tuple(sorted(_EXTERNAL_SOURCES))!r}"
+            )
+        level = self._trigger.level if self._trigger.level is not None else 0.0
+        return (
+            _CHANNEL_INDEX[channel],
+            _slope_mode(self._trigger.slope),
+            volts_to_code(
+                level,
+                self._range_mv[channel],
+                self._max_adc,
+                offset_v=self._offset_v[channel],
+            ),
+        )
+
+    def validate_trigger(self) -> None:
+        """Check the configured trigger against the configured input ranges.
+
+        A channel trigger's level is referred to that channel's range, so a
+        level that is perfectly legal for the external input (referred to the
+        connector, +/-5 V) can be unreachable once the source becomes a
+        channel -- and a level the channel can never cross is a trigger that
+        never fires. The card only learns this when :meth:`arm` writes the
+        registers, which is far too late: one instrument failing to arm takes
+        the whole multi-instrument shot down with it, since a half-armed set
+        is never fired. Running the same arithmetic at ``configure()`` time
+        turns that into an error where the setting was made.
+
+        Raises
+        ------
+        ValueError
+            If the trigger cannot be realised as configured.
+        """
+        source = self._trigger.source
+        if source is None or source in _EXTERNAL_SOURCES:
+            return
+        self._resolve_channel_trigger()
 
     def set_segments(self, segments: int | None) -> None:
         """Switch to Multiple Recording with ``segments`` segments, or ``None`` for Standard Single."""
@@ -898,23 +961,8 @@ class SpectrumM5i3367(Scope):
             card.set_i32(SPC_TRIG_EXT0_LEVEL0, millivolts)
             card.set_i32(SPC_TRIG_ORMASK, SPC_TMASK_EXT0)
         else:
-            channel = self._trigger.source
-            if channel not in self._channels:
-                raise ValueError(
-                    f"trigger source {channel!r} is not one of the acquired "
-                    f"channels {self._channels!r} and is not an external "
-                    f"source {tuple(sorted(_EXTERNAL_SOURCES))!r}"
-                )
-            index = _CHANNEL_INDEX[channel]
-            mode = _slope_mode(self._trigger.slope)
+            index, mode, code = self._resolve_channel_trigger()
             card.set_i32(SPC_TRIG_CH0_MODE + index, mode)
-            level = self._trigger.level if self._trigger.level is not None else 0.0
-            code = volts_to_code(
-                level,
-                self._range_mv[channel],
-                self._max_adc,
-                offset_v=self._offset_v[channel],
-            )
             card.set_i32(SPC_TRIG_CH0_LEVEL0 + index, code)
             card.set_i32(SPC_TRIG_CH_ORMASK0, 1 << index)
 
