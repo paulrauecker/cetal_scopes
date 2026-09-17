@@ -73,6 +73,7 @@ class FakeTransport:
         advance_on_run: bool = True,
         advance_on_query: bool = False,
         trigger_level: str = "0.00E+00",
+        sample_rate: str = "2.00E+09",
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
@@ -82,6 +83,7 @@ class FakeTransport:
         self.advance_on_run = advance_on_run
         self.advance_on_query = advance_on_query
         self.trigger_level = trigger_level
+        self.sample_rate = sample_rate
         self.num_acq = 0
         self.opened = False
         self.closed = False
@@ -113,6 +115,8 @@ class FakeTransport:
             return self.status
         if command == ":TRIGger:EDGE:LEVel?":
             return self.trigger_level
+        if command == ":ACQuire:SRATe?":
+            return self.sample_rate
         raise AssertionError(f"unexpected query {command!r}")
 
     def query_block(self, command: str) -> bytes:
@@ -383,6 +387,48 @@ def test_configure_applies_settings() -> None:
     assert ":CHANnel1:SCALe 0.2" in fake.written
     assert ":CHANnel1:OFFSet 0" in fake.written
     assert ":CHANnel1:COUPling DC" in fake.written
+
+
+def test_configure_turns_interpolation_off_by_default() -> None:
+    """sin(x)/x reconstruction invents samples; it is opt-in, not the default."""
+    scope, fake = make_driver()
+    scope.connect()
+    scope.configure({"timebase": 1e-6})
+
+    assert ":ACQuire:INTerpolation OFF" in fake.written
+
+
+def test_configure_can_opt_into_sinx_interpolation() -> None:
+    scope, fake = make_driver()
+    scope.connect()
+    scope.configure({"interpolation": "ON"})
+
+    assert ":ACQuire:INTerpolation ON" in fake.written
+
+
+def test_interpolation_choice_persists_across_configure_calls() -> None:
+    scope, fake = make_driver()
+    scope.connect()
+    scope.configure({"interpolation": True})
+    fake.written.clear()
+    scope.configure({"timebase": 1e-6})
+
+    assert ":ACQuire:INTerpolation ON" in fake.written
+
+
+def test_configure_rejects_an_unknown_interpolation_state() -> None:
+    scope, _ = make_driver()
+    scope.connect()
+    with pytest.raises(ValueError, match="unsupported interpolation"):
+        scope.configure({"interpolation": "SOMETIMES"})
+
+
+def test_sample_rate_reads_back_what_the_scope_will_actually_use() -> None:
+    scope, fake = make_driver()
+    fake.sample_rate = "5.00E+09"
+    scope.connect()
+
+    assert scope.sample_rate() == pytest.approx(5e9)
 
 
 def test_configure_rejects_unknown_key() -> None:

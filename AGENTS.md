@@ -75,6 +75,12 @@ Read `docs/architecture.md` before changing the data model. In short:
   exist, and force trigger is a *value* of `:TRIGger:MODE` (`FTRIG`). Forcing
   therefore clobbers the configured sweep mode, and the driver re-asserts it on
   the next `arm()`.
+  Interpolation (`:ACQuire:INTerpolation`, `ON` = sin(x)/x, `OFF` = linear) is
+  what Siglent's "enhanced sample rate" (ESR, 10 GSa/s against a native
+  5 GSa/s per channel) is made of: reconstructed points, not measured ones.
+  The driver asserts `OFF` on every `configure()` (`DEFAULT_INTERPOLATION`);
+  pass `interpolation = "ON"` to opt back in. Interpolate downstream instead,
+  where the choice is visible in the code.
   Also expect the deterministic ADC comb from the 16-bit transfer path: a
   256-sample pattern giving spurs at every `k*fs/256` (`fs/8`, `fs/4`, `fs/2` are
   the strongest) on every channel including open ones. The driver defaults to
