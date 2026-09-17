@@ -30,6 +30,7 @@ from cetal_scopes.scopes.base import Scope
 __all__ = [
     "DEFAULT_INTERPOLATION",
     "MAX_RATE_HZ",
+    "MEMORY_MANAGEMENT_MODES",
     "VDIV_LADDER",
     "AcquisitionPlan",
     "SiglentSDS6204L",
@@ -57,6 +58,7 @@ _PANEL_KEYS = frozenset(
         "delay",
         "acquire_type",
         "interpolation",
+        "memory_management",
         "memory_depth",
         "trigger",
         "trigger_mode",
@@ -332,6 +334,22 @@ def snap_mdepth(samples: int) -> str:
         if value >= samples:
             return label
     return MDEPTH_ENUM[-1][1]
+
+
+#: ``:ACQuire:MMANagement`` modes, by the prefix the instrument answers with.
+MEMORY_MANAGEMENT_MODES: tuple[str, ...] = ("AUTO", "FMDepth", "FSRate")
+
+
+def _normalize_memory_management(value: object) -> str:
+    """Normalize a memory-management mode to its SCPI spelling."""
+    token = str(value).strip().upper()
+    for mode in MEMORY_MANAGEMENT_MODES:
+        if token in {mode.upper(), mode.upper()[:4]}:
+            return mode
+    raise ValueError(
+        f"unsupported memory management {value!r}; expected one of "
+        f"{list(MEMORY_MANAGEMENT_MODES)}"
+    )
 
 
 def _normalize_interpolation(value: object) -> str:
@@ -882,6 +900,9 @@ class SiglentSDS6204L(Scope):
         if "interpolation" in settings:
             self._interpolation = _normalize_interpolation(settings["interpolation"])
         self.set_interpolation(self._interpolation)
+        # Before memory_depth: in AUTO the instrument ignores depth writes.
+        if "memory_management" in settings:
+            self.set_memory_management(str(settings["memory_management"]))
         if "memory_depth" in settings:
             self.set_memory_depth(str(settings["memory_depth"]))
         if "trigger_mode" in settings:
@@ -1117,6 +1138,21 @@ class SiglentSDS6204L(Scope):
         value, is what the acquisition will run at.
         """
         return float(self._query(":ACQuire:SRATe?"))
+
+    def set_memory_management(self, mode: str) -> None:
+        """Set how the scope divides a window between sample rate and depth.
+
+        ``AUTO`` lets the instrument choose both -- and then it *ignores*
+        :meth:`set_memory_depth` entirely, silently, which is how a depth
+        request can have no effect at all. ``FMDepth`` (fixed memory depth)
+        holds the depth and lets the rate follow; ``FSRate`` (fixed sampling
+        rate) holds the rate and lets the depth follow.
+        """
+        self._write(f":ACQuire:MMANagement {_normalize_memory_management(mode)}")
+
+    def memory_management(self) -> str:
+        """The memory-management mode the instrument reports."""
+        return self._query(":ACQuire:MMANagement?")
 
     def memory_depth(self) -> str:
         """The memory depth the instrument reports, as its own label (e.g. ``1M``).
