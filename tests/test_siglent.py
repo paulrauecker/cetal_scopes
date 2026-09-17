@@ -75,6 +75,7 @@ class FakeTransport:
         trigger_level: str = "0.00E+00",
         sample_rate: str = "2.00E+09",
         memory_depth: str = "10k",
+        memory_management: str = "AUTO",
         timebase: str = "1.00E-06",
     ) -> None:
         self.descriptor = descriptor
@@ -87,6 +88,7 @@ class FakeTransport:
         self.trigger_level = trigger_level
         self.sample_rate = sample_rate
         self.memory_depth = memory_depth
+        self.memory_management = memory_management
         self.timebase = timebase
         self.num_acq = 0
         self.opened = False
@@ -123,6 +125,8 @@ class FakeTransport:
             return self.sample_rate
         if command == ":ACQuire:MDEPth?":
             return self.memory_depth
+        if command == ":ACQuire:MMANagement?":
+            return self.memory_management
         if command == ":TIMebase:SCALe?":
             return self.timebase
         raise AssertionError(f"unexpected query {command!r}")
@@ -429,6 +433,35 @@ def test_configure_rejects_an_unknown_interpolation_state() -> None:
     scope.connect()
     with pytest.raises(ValueError, match="unsupported interpolation"):
         scope.configure({"interpolation": "SOMETIMES"})
+
+
+def test_configure_sets_memory_management_before_memory_depth() -> None:
+    """In AUTO the scope ignores depth writes, so order is not cosmetic."""
+    scope, fake = make_driver()
+    scope.connect()
+    scope.configure({"memory_management": "FMDepth", "memory_depth": "250k"})
+
+    written = [w for w in fake.written if w.startswith(":ACQuire:M")]
+    assert written == [":ACQuire:MMANagement FMDepth", ":ACQuire:MDEPth 250k"]
+
+
+@pytest.mark.parametrize(
+    ("given", "sent"),
+    [("auto", "AUTO"), ("FSRate", "FSRate"), ("fmde", "FMDepth"), ("FSRA", "FSRate")],
+)
+def test_memory_management_accepts_the_usual_spellings(given: str, sent: str) -> None:
+    scope, fake = make_driver()
+    scope.connect()
+    scope.configure({"memory_management": given})
+
+    assert f":ACQuire:MMANagement {sent}" in fake.written
+
+
+def test_configure_rejects_an_unknown_memory_management_mode() -> None:
+    scope, _ = make_driver()
+    scope.connect()
+    with pytest.raises(ValueError, match="unsupported memory management"):
+        scope.configure({"memory_management": "WHENEVER"})
 
 
 def test_memory_depth_reads_back_the_instruments_own_label() -> None:

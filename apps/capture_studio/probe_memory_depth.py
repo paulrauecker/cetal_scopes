@@ -13,6 +13,11 @@ previous value in place, so the read-back is the answer. At a known timebase
 the reported sample rate is a second, independent check: it is
 ``depth / window`` for a depth the scope really took.
 
+It repeats that under each ``:ACQuire:MMANagement`` mode, because the mode
+decides whether depth is settable at all: in ``AUTO`` the instrument picks
+both rate and depth and ignores depth writes without complaining, so a probe
+that does not set the mode first measures nothing but the current state.
+
 Nothing is armed and no trigger is touched. The acquisition settings this
 changes are restored on the way out, including after Ctrl-C.
 
@@ -29,7 +34,11 @@ import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from cetal_scopes.scopes.siglent import GRID_NUM, SiglentSDS6204L
+from cetal_scopes.scopes.siglent import (
+    GRID_NUM,
+    MEMORY_MANAGEMENT_MODES,
+    SiglentSDS6204L,
+)
 
 __all__ = ["CANDIDATES", "Probe", "build_parser", "main", "probe_depths"]
 
@@ -179,11 +188,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         was_timebase = scope.timebase()
         print(f"restoring afterwards: depth {was_depth}, {was_timebase:g} s/div\n")
         try:
+            was_mode = scope.memory_management()
+        except (OSError, ValueError):
+            was_mode = None
+        print(f"memory management: {was_mode or 'unreadable'}\n")
+
+        try:
+            # Stopped and at a known timebase, so a depth write has the best
+            # chance of being accepted and the implied rate is computable.
+            scope.abort()
             scope.set_timebase(scale=PROBE_TIMEBASE)
             window = PROBE_TIMEBASE * GRID_NUM
-            print(render(probe_depths(scope), window=window))
+            for mode in MEMORY_MANAGEMENT_MODES:
+                print(f"=== :ACQuire:MMANagement {mode} " + "=" * 30)
+                try:
+                    scope.set_memory_management(mode)
+                    print(f"    reports back: {scope.memory_management()}")
+                except (OSError, ValueError) as exc:
+                    print(f"    mode refused ({exc}); skipping")
+                    continue
+                print(render(probe_depths(scope), window=window))
+                print()
         finally:
             # Leave the bench as it was found, including on Ctrl-C.
+            if was_mode is not None:
+                scope.set_memory_management(was_mode)
             scope.set_memory_depth(was_depth)
             scope.set_timebase(scale=was_timebase)
     finally:

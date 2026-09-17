@@ -11,9 +11,12 @@ from cetal_scopes.scopes.siglent import SiglentSDS6204L
 class DepthOnlyTransport:
     """A scope that offers only `offered`, ignoring any other depth written."""
 
-    def __init__(self, offered: set[str], *, depth: str = "1M") -> None:
+    def __init__(
+        self, offered: set[str], *, depth: str = "1M", mode: str = "FMDepth"
+    ) -> None:
         self.offered = offered
         self.depth = depth
+        self.mode = mode
         self.window = 200e-6
 
     def open(self) -> None: ...
@@ -21,7 +24,12 @@ class DepthOnlyTransport:
     def close(self) -> None: ...
 
     def write(self, command: str) -> None:
+        if command.startswith(":ACQuire:MMANagement "):
+            self.mode = command.split(" ", 1)[1]
         if command.startswith(":ACQuire:MDEPth "):
+            # In AUTO the instrument picks memory itself and ignores this.
+            if self.mode.upper().startswith("AUTO"):
+                return
             asked = command.split(" ", 1)[1]
             if asked in self.offered:
                 self.depth = asked
@@ -36,16 +44,20 @@ class DepthOnlyTransport:
             return str(float(self.depth[:-1]) * scale / self.window)
         if command == ":TIMebase:SCALe?":
             return "2.00E-05"
+        if command == ":ACQuire:MMANagement?":
+            return self.mode
         raise AssertionError(f"unexpected query {command!r}")
 
     def query_block(self, command: str) -> bytes:  # pragma: no cover - unused
         raise AssertionError(command)
 
 
-def probe_with(offered: set[str], *, starting_at: str = "700k") -> list[Probe]:
+def probe_with(
+    offered: set[str], *, starting_at: str = "700k", mode: str = "FMDepth"
+) -> list[Probe]:
     # Start somewhere that is not a candidate, so "reads back as asked" can
     # only mean the write landed -- not that the scope was already there.
-    transport = DepthOnlyTransport(offered, depth=starting_at)
+    transport = DepthOnlyTransport(offered, depth=starting_at, mode=mode)
     scope = SiglentSDS6204L(channels=("C1",), transport=transport)
     scope.connect()
     return probe_depths(scope)
@@ -99,3 +111,17 @@ def test_a_depth_the_scope_already_sits_at_counts_as_offered() -> None:
 def test_every_candidate_label_is_understood_by_the_normaliser(label: str) -> None:
     results = {item.asked: item for item in probe_with({label})}
     assert results[label].accepted
+
+
+def test_auto_mode_ignores_every_depth_write() -> None:
+    """The failure the first real probe run hit: AUTO measures nothing."""
+    results = probe_with({"10k", "250k", "1M"}, mode="AUTO")
+    assert not any(item.accepted for item in results)
+
+
+def test_a_fixed_depth_mode_is_what_makes_the_ladder_measurable() -> None:
+    offered = {"10k", "250k", "1M"}
+    auto = {i.asked for i in probe_with(offered, mode="AUTO") if i.accepted}
+    fixed = {i.asked for i in probe_with(offered, mode="FMDepth") if i.accepted}
+    assert auto == set()
+    assert fixed == offered
