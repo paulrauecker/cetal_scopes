@@ -1139,6 +1139,30 @@ class SiglentSDS6204L(Scope):
         """
         return float(self._query(":ACQuire:SRATe?"))
 
+    def event_status(self) -> int:
+        """Read and clear ``*ESR?``, the standard event status register.
+
+        Bit 4 (value 16) is a command error: the instrument did not
+        understand the last command, or would not take the parameter. Since a
+        setting write is not acknowledged in any other way, this is how a
+        silently-discarded write is told apart from one that landed and had
+        no visible effect. Reading clears the register, so read it once
+        before the write you want to test.
+        """
+        return int(float(self._query("*ESR?")))
+
+    def raw_write(self, command: str) -> None:
+        """Send a command verbatim. For bench probing, not for drivers.
+
+        The driver's own methods are the supported path; this exists so a
+        probe can try spellings the driver does not know about.
+        """
+        self._write(command)
+
+    def raw_query(self, command: str) -> str:
+        """Send a query verbatim and return the reply. For bench probing."""
+        return self._query(command)
+
     def set_memory_management(self, mode: str) -> None:
         """Set how the scope divides a window between sample rate and depth.
 
