@@ -37,6 +37,8 @@
         </label>
         <label class="inline"><input type="checkbox" id="raw"> raw (skip processing)</label>
         <button id="refresh">Refresh</button>
+        <button id="zoom-reset" class="small" title="Back to the whole record">Reset zoom</button>
+        <span id="zoom-note" class="note"></span>
       </div>
       <div class="channel-toggles">
         <span class="note" title="Applies to the traces and the spectrum">Channels</span>
@@ -83,8 +85,16 @@
       <div class="panel-head">
         <h2>Spectrum</h2>
         <label><input type="checkbox" id="psd"> PSD</label>
+        <label title="Show the spectrum in dB relative to one unit of whatever the channels are in (dB re 1 V for volts). A dB axis is already logarithmic, so 'log y' does not apply.">
+          <input type="checkbox" id="db"> dB</label>
         <label><input type="checkbox" id="logx" checked> log f</label>
-        <label><input type="checkbox" id="logy" checked> log y</label>
+        <label id="logy-wrap"><input type="checkbox" id="logy" checked> log y</label>
+        <label title="Lowest frequency drawn, in Hz. Blank starts at DC (or the first bin above it on a log axis).">f min
+          <input id="f-min" type="number" step="any" placeholder="DC" style="width:8em">
+        </label>
+        <label title="Highest frequency drawn, in Hz. Blank goes to the Nyquist frequency of the fastest capture. The band is applied before the drawing budget, so narrowing it buys resolution rather than losing it.">f max
+          <input id="f-max" type="number" step="any" placeholder="Nyquist" style="width:8em">
+        </label>
         <label title="Points drawn per trace. The spectrum is binned to this, keeping each bin's extremes; analysis always uses the full record.">Detail
           <select id="detail">
             <option value="1500">fast</option>

@@ -630,3 +630,26 @@ def test_subscribe_streams_events() -> None:
     events = run(main())
     assert events[0].phase == "arming"
     assert events[-1].kind == "result"
+
+
+def test_a_settings_failure_on_open_names_the_instrument() -> None:
+    # A bench of several scopes reports a settings error through one open()
+    # call; without the label there is no way to tell whose setting it was.
+    journal: list[str] = []
+    good = StagedFakeScope("a", journal)
+    bad = StagedFakeScope("b", journal)
+
+    def refuse(settings: Mapping[str, Any]) -> None:
+        raise ValueError("trigger level 1.5 V is outside the +/-1 V input range")
+
+    bad.configure = refuse  # type: ignore[method-assign]
+    specs = [
+        InstrumentSpec(label="a", scope=good, settings={"record_length": 64}),
+        InstrumentSpec(label="b", scope=bad, settings={"record_length": 64}),
+    ]
+
+    async def main() -> None:
+        await MultiScopeAcquisition(specs).open()
+
+    with pytest.raises(ValueError, match=r"^b: trigger level 1\.5 V"):
+        run(main())

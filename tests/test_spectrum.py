@@ -434,13 +434,40 @@ def test_acquire_configures_channel_trigger() -> None:
     assert card.registers[SPC_TRIG_CH0_LEVEL0 + 1] == expected_code
 
 
-def test_acquire_rejects_trigger_source_not_in_channels() -> None:
-    scope, card = make_driver(channels=("CH0",))
-    scope.configure({"record_length": 32, "trigger": {"source": "CH1"}})
-    card.fake_waveform = np.zeros(32, dtype=np.int16)
+def test_configure_rejects_trigger_source_not_in_channels() -> None:
+    scope, _ = make_driver(channels=("CH0",))
 
     with pytest.raises(ValueError, match="trigger source"):
-        scope.acquire()
+        scope.configure({"record_length": 32, "trigger": {"source": "CH1"}})
+
+
+def test_configure_rejects_a_channel_level_outside_the_input_range() -> None:
+    # The trap this guards: an external trigger's level is referred to the
+    # connector (+/-5 V), a channel trigger's to that channel's input range.
+    # Switching the source and keeping the level leaves a trigger that can
+    # never fire, and the card only finds out when arm() writes registers --
+    # by which point the whole shot is lost, since a half-armed set is never
+    # fired.
+    scope, _ = make_driver(channels=("CH0", "CH1"))
+
+    scope.configure({"range": 1.0, "trigger": {"source": "EXT", "level": 1.5}})
+
+    with pytest.raises(ValueError, match="referred to that channel's input range"):
+        scope.configure({"trigger": {"source": "CH1", "level": 1.5}})
+
+
+def test_a_channel_level_inside_the_range_is_accepted() -> None:
+    scope, card = make_driver(channels=("CH0", "CH1"))
+    scope.configure(
+        {"record_length": 32, "range": 1.0, "trigger": {"source": "CH1", "level": 0.2}}
+    )
+    # Two channels, so the card hands back an interleaved 2 x 32.
+    card.fake_waveform = np.zeros(64, dtype=np.int16)
+
+    scope.acquire()
+
+    assert card.registers[SPC_TRIG_CH_ORMASK0] == 0b10
+    assert card.registers[SPC_TRIG_CH0_LEVEL0 + 1] == volts_to_code(0.2, 1000, 2047)
 
 
 def test_acquire_writes_registers_in_the_documented_order() -> None:

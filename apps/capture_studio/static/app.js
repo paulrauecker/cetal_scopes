@@ -12,6 +12,7 @@ const state = {
   pipeline: [],
   inventory: null,
   drivers: [],
+  verticalDrivers: {},
   configPath: null,
 };
 
@@ -323,29 +324,200 @@ async function savePipeline() {
 
 const PLOT_CONFIG = { responsive: true, displaylogo: false };
 
-// Every figure request carries the generation it was issued in. A slower
-// panel answering after the user has moved on used to repaint the plot with
-// a stale figure, which looked exactly like "the plot did not update".
-let generation = 0;
+// One generation counter per plot. A slower panel answering after the user
+// has moved on used to repaint with a stale figure, which looked exactly like
+// "the plot did not update"; a single shared counter fixed that but let a
+// zoom of the traces cancel the spectrum's in-flight redraw, leaving it
+// stale instead. Each plot only races itself.
+const generations = {};
 let inFlight = 0;
 let refreshTimer = null;
+
+// The visible time window, in seconds on the aligned axis, or null for the
+// whole record. Zooming the traces re-asks the server for just this span, so
+// the drawing budget is spent on what is on screen instead of on the whole
+// record -- which is what makes a zoom recover real samples rather than
+// magnify the ones already sent.
+let timeWindow = null;
+let timeScale = 1e-6; // seconds per unit on the drawn x-axis
+let zoomTimer = null;
+// Set while Plotly is being handed a figure, so the relayout events that
+// causes are not mistaken for the user zooming.
+let applyingFigure = false;
 
 function setDrawing(active) {
   inFlight += active ? 1 : -1;
   $("drawing").hidden = inFlight <= 0;
 }
 
-async function drawFigure(target, query, token) {
+async function drawFigure(target, query) {
+  const token = (generations[target] = (generations[target] || 0) + 1);
   setDrawing(true);
   try {
-    const payload = await api(`api/figure?${new URLSearchParams(query)}`);
-    if (token !== generation) return null;
+    // Drop empty values rather than sending "null" as a string.
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== null && value !== undefined && value !== "") {
+        params.set(key, value);
+      }
+    }
+    const payload = await api(`api/figure?${params}`);
+    if (token !== generations[target]) return null;
     const figure = payload.figure;
-    Plotly.react(target, figure.data, figure.layout, PLOT_CONFIG);
-    return payload.warnings || [];
+    applyingFigure = true;
+    try {
+      Plotly.react(target, figure.data, figure.layout, PLOT_CONFIG);
+    } finally {
+      applyingFigure = false;
+    }
+    return { warnings: payload.warnings || [], meta: figure.layout.meta || {} };
   } finally {
     setDrawing(false);
   }
+}
+
+/** The Traces panel's controls, as figure query parameters. */
+function timeQuery(channels, raw, detail) {
+  const query = {
+    panel: "time",
+    layout: $("layout").value,
+    channels,
+    raw,
+    max_points: detail,
+  };
+  if (timeWindow) {
+    query.t_min = timeWindow.t_min;
+    query.t_max = timeWindow.t_max;
+  }
+  return query;
+}
+
+/**
+ * Take the axis scale and the resolution note from the figure just drawn.
+ *
+ * The scale is what turns an axis coordinate back into seconds, and the
+ * server holds it fixed across zoom levels for exactly that reason.
+ */
+function adoptTimeMeta(meta) {
+  if (meta.time_scale) timeScale = meta.time_scale;
+  const note = $("zoom-note");
+  if (meta.samples_in_window === undefined) {
+    note.textContent = "";
+    return;
+  }
+  const span = timeWindow
+    ? (timeWindow.t_max - timeWindow.t_min) / meta.time_scale
+    : 0;
+  const where = timeWindow
+    ? `${span.toPrecision(3)} ${meta.time_unit} shown`
+    : "whole record";
+  note.textContent = meta.decimated
+    ? `${where}: ${meta.samples_in_window} samples → ${meta.drawn_points} drawn ` +
+      "(min/max envelope) — zoom in for every sample"
+    : `${where}: every sample drawn (${meta.drawn_points} points, full rate)`;
+}
+
+/** Read an x-range out of a relayout event, in axis units. */
+function relayoutRange(event) {
+  if (Object.keys(event).some((key) => /^xaxis\d*\.autorange$/.test(key))) {
+    return null; // reset to the whole record
+  }
+  for (const key of Object.keys(event)) {
+    const whole = key.match(/^xaxis(\d*)\.range$/);
+    if (whole && Array.isArray(event[key])) {
+      return [Number(event[key][0]), Number(event[key][1])];
+    }
+    const low = key.match(/^xaxis(\d*)\.range\[0\]$/);
+    if (low) {
+      const high = event[`xaxis${low[1]}.range[1]`];
+      if (high !== undefined) return [Number(event[key]), Number(high)];
+    }
+  }
+  return undefined; // nothing about the x-axis; not our business
+}
+
+function sameWindow(a, b) {
+  if (a === null || b === null) return a === b;
+  // Relative, because the numbers are absolute times on a µs-or-finer axis.
+  const span = Math.abs(b.t_max - b.t_min) || 1;
+  return (
+    Math.abs(a.t_min - b.t_min) < span * 1e-6 &&
+    Math.abs(a.t_max - b.t_max) < span * 1e-6
+  );
+}
+
+/**
+ * Re-ask for the traces whenever the visible span changes.
+ *
+ * Bound once, on the div Plotly has already drawn into. `applyingFigure`
+ * keeps our own redraw from being read as a zoom, which would otherwise
+ * loop: react fires relayout, relayout refetches, the refetch reacts.
+ */
+function bindTimeZoom() {
+  const node = $("time-plot");
+  if (!node.on || node.dataset.zoomBound) return;
+  node.dataset.zoomBound = "1";
+  node.on("plotly_relayout", (event) => {
+    if (applyingFigure) return;
+    const range = relayoutRange(event);
+    if (range === undefined) return;
+    const next =
+      range === null
+        ? null
+        : {
+            t_min: Math.min(range[0], range[1]) * timeScale,
+            t_max: Math.max(range[0], range[1]) * timeScale,
+          };
+    if (sameWindow(next, timeWindow)) return;
+    timeWindow = next;
+    clearTimeout(zoomTimer);
+    // A drag emits a stream of these; only the span it settles on matters.
+    zoomTimer = setTimeout(() => {
+      refreshTimeFigure().catch(() => {});
+    }, 180);
+  });
+}
+
+/** Redraw only the traces, for a zoom: the other panels did not change. */
+async function refreshTimeFigure() {
+  if (!state.shot) return;
+  const channels = visibleChannels().join(",");
+  const raw = $("raw").checked ? "true" : "false";
+  const result = await drawFigure(
+    "time-plot",
+    timeQuery(channels, raw, $("detail").value),
+  );
+  if (result) adoptTimeMeta(result.meta);
+}
+
+/** The Spectrum panel's controls, as figure query parameters. */
+function spectrumQuery(channels, raw, detail) {
+  const query = {
+    panel: "fft",
+    channels,
+    psd: $("psd").checked,
+    db: $("db").checked,
+    log_x: $("logx").checked,
+    log_y: $("logy").checked,
+    window: $("window").value,
+    max_points: detail,
+    raw,
+  };
+  // Blank means "no limit", which is not the same as zero.
+  const low = $("f-min").value.trim();
+  const high = $("f-max").value.trim();
+  if (low !== "") query.f_min = low;
+  if (high !== "") query.f_max = high;
+  return query;
+}
+
+/** A dB axis is already logarithmic, so "log y" has nothing left to do. */
+function updateSpectrumControls() {
+  const db = $("db").checked;
+  $("logy").disabled = db;
+  $("logy-wrap").title = db
+    ? "Not applicable: a dB axis is already logarithmic"
+    : "";
 }
 
 /** Coalesce the bursts of changes a single interaction produces. */
@@ -360,7 +532,6 @@ function scheduleRefresh() {
 
 async function refreshFigures() {
   if (!state.shot) return;
-  const token = ++generation;
   const raw = $("raw").checked ? "true" : "false";
   // Always explicit: an empty value means none, which is what an empty
   // selection should draw.
@@ -371,36 +542,23 @@ async function refreshFigures() {
   // one failing does not stop the others: a two-channel panel that needs a
   // selection the shot cannot satisfy must not keep the traces and the
   // spectrum from redrawing.
-  const traces = drawFigure(
-    "time-plot",
-    { panel: "time", layout: $("layout").value, channels, raw, max_points: detail },
-    token,
-  ).then((warnings) => {
-    if (warnings) $("pipeline-warnings").textContent = warnings.join(" · ");
-  });
-
-  const spectrum = drawFigure(
-    "fft-plot",
-    {
-      panel: "fft",
-      channels,
-      psd: $("psd").checked,
-      log_x: $("logx").checked,
-      log_y: $("logy").checked,
-      window: $("window").value,
-      max_points: detail,
-      raw,
+  const traces = drawFigure("time-plot", timeQuery(channels, raw, detail)).then(
+    (result) => {
+      if (!result) return;
+      $("pipeline-warnings").textContent = result.warnings.join(" · ");
+      adoptTimeMeta(result.meta);
     },
-    token,
   );
 
-  await Promise.allSettled([traces, spectrum, refreshPairFigure(token)]);
+  const spectrum = drawFigure("fft-plot", spectrumQuery(channels, raw, detail));
+
+  await Promise.allSettled([traces, spectrum, refreshPairFigure()]);
+  bindTimeZoom();
 }
 
-async function refreshPairFigure(token) {
+async function refreshPairFigure() {
   updatePairControls();
   if (!state.shot) return;
-  if (token === undefined) token = ++generation;
   const panel = $("pair-panel").value;
   const a = $("chan-a").value;
   const b = $("chan-b").value;
@@ -424,7 +582,7 @@ async function refreshPairFigure(token) {
   }
 
   try {
-    await drawFigure("pair-plot", query, token);
+    await drawFigure("pair-plot", query);
   } catch {
     /* the error is already in the status line */
   }
@@ -476,6 +634,10 @@ async function refreshMeasurements() {
 function adoptShot(payload) {
   if (payload.status) applyStatus(payload.status);
   if (payload.shot !== undefined) state.shot = payload.shot;
+  // A window measured on the previous shot means nothing on this one; the
+  // figure's uirevision changes with the shot id, so Plotly drops the old
+  // axis range to match.
+  timeWindow = null;
   fillChannelPickers();
   renderChannelToggles();
   renderOffsets();
@@ -552,6 +714,7 @@ function splitSettings(settings) {
   const known = new Set(SETTING_FIELDS.map(([name]) => name));
   for (const [key, value] of Object.entries(settings || {})) {
     if (key === "trigger" && value && typeof value === "object") continue;
+    if (key === "vertical" && value && typeof value === "object") continue;
     if (key === "channels") continue; // edited as the instrument's channel list
     if (known.has(key) && (value === null || typeof value !== "object")) {
       scalar[key] = value;
@@ -585,6 +748,98 @@ function readJson(box, what) {
     box.classList.add("bad-input");
     throw new Error(`${what} is not a JSON object: ${error.message}`);
   }
+}
+
+/**
+ * Per-channel vertical settings, for drivers with a panel V/div.
+ *
+ * V/div and the shared `range` (volts full-scale) are two spellings of one
+ * knob -- `range` is `divisions / 2` times the V/div -- and the driver refuses
+ * to be told both for the same channel, since there is no honest precedence
+ * between them. So setting a channel's V/div clears the instrument's `range`,
+ * and clearing every V/div hands the channel back to `range`.
+ *
+ * Returns the node plus a `sync`, because the two controls have to keep each
+ * other honest without re-rendering the card: the JSON boxes beside them hold
+ * text that is only read on Apply, and rebuilding the card would throw away
+ * whatever was half-typed in them.
+ */
+function verticalEditor(item) {
+  const host = document.createElement("div");
+  host.className = "instrument-vertical";
+  const spec = state.verticalDrivers[item.driver];
+  if (!spec || !item.channels.length) return { node: host, sync: () => {} };
+
+  const ladder = document.createElement("datalist");
+  ladder.id = `vdiv-${item.label}`;
+  for (const step of spec.vdiv_ladder) {
+    const option = document.createElement("option");
+    option.value = step;
+    ladder.append(option);
+  }
+  host.append(ladder);
+
+  const note = document.createElement("span");
+  note.className = "note";
+  note.style.padding = "0";
+  host.append(note);
+
+  /** The instrument's `vertical` mapping, pruned of anything left empty. */
+  function vertical(prune = true) {
+    const current = item.settings.vertical || {};
+    if (prune) {
+      for (const [name, params] of Object.entries(current)) {
+        if (!params || !Object.keys(params).length) delete current[name];
+      }
+      if (Object.keys(current).length) item.settings.vertical = current;
+      else delete item.settings.vertical;
+    }
+    return current;
+  }
+
+  const inputs = new Map();
+  const sync = () => {
+    const current = vertical();
+    for (const [name, input] of inputs) {
+      const scale = (current[name] || {}).scale;
+      input.value = scale == null ? "" : scale;
+    }
+    const set = inputs.size
+      ? [...inputs.keys()].filter((name) => (current[name] || {}).scale != null).length
+      : 0;
+    note.textContent = set
+      ? `V/div set on ${set} of ${inputs.size} channels; "range" is not sent ` +
+        "for them. The instrument snaps up to its own ladder."
+      : 'V/div — blank means the channel follows "range" above ' +
+        `(±range = ${spec.divisions / 2} × V/div).`;
+  };
+
+  for (const name of item.channels) {
+    const input = textInput(null, { type: "number", width: "6em" });
+    input.setAttribute("list", ladder.id);
+    input.addEventListener("change", () => {
+      const value = readNumber(input);
+      const current = vertical(false);
+      const params = current[name] || {};
+      if (value === null) {
+        delete params.scale;
+      } else {
+        params.scale = value;
+        current[name] = params;
+        // Two spellings of one knob; the driver rejects being told both.
+        delete item.settings.range;
+        host.dispatchEvent(new CustomEvent("vdiv-set", { bubbles: true }));
+      }
+      if (Object.keys(params).length) current[name] = params;
+      vertical();
+      sync();
+    });
+    inputs.set(name, input);
+    host.append(field(`${name} V/div`, input, "Volts per division on the panel"));
+  }
+
+  sync();
+  return { node: host, sync };
 }
 
 function renderInventory() {
@@ -683,6 +938,7 @@ function renderInventory() {
     const { scalar, advanced } = splitSettings(item.settings);
     const body = document.createElement("div");
     body.className = "instrument-body";
+    let rangeInput = null;
     for (const [name, type, hint] of SETTING_FIELDS) {
       const input = textInput(scalar[name], {
         type,
@@ -692,7 +948,15 @@ function renderInventory() {
         const value = type === "number" ? readNumber(input) : input.value.trim() || null;
         if (value === null) delete item.settings[name];
         else item.settings[name] = value;
+        if (name === "range" && value !== null && item.settings.vertical) {
+          // The panel V/div and the SI range write the same setting.
+          for (const params of Object.values(item.settings.vertical)) {
+            delete params.scale;
+          }
+          vertical.sync();
+        }
       });
+      rangeInput = name === "range" ? input : rangeInput;
       body.append(field(name.replace(/_/g, " "), input, hint));
     }
 
@@ -719,6 +983,11 @@ function renderInventory() {
       body.append(field(`trigger ${name}`, input, hint));
     }
     card.append(body);
+    const vertical = verticalEditor(item);
+    vertical.node.addEventListener("vdiv-set", () => {
+      if (rangeInput) rangeInput.value = "";
+    });
+    card.append(vertical.node);
 
     const extras = document.createElement("div");
     extras.className = "instrument-extras";
@@ -762,8 +1031,10 @@ function collectInventory() {
     );
     const { scalar } = splitSettings(item.settings);
     const trigger = item.settings.trigger;
+    const vertical = item.settings.vertical;
     item.settings = { ...advanced, ...scalar };
     if (trigger && Object.keys(trigger).length) item.settings.trigger = trigger;
+    if (vertical && Object.keys(vertical).length) item.settings.vertical = vertical;
   }
   return inventory;
 }
@@ -772,6 +1043,7 @@ async function loadInventory() {
   const payload = await api("api/inventory");
   state.inventory = payload.inventory;
   state.drivers = payload.drivers;
+  state.verticalDrivers = payload.vertical_drivers || {};
   state.configPath = payload.config_path;
   renderInventory();
 }
@@ -936,9 +1208,21 @@ function wire() {
   });
 
   $("refresh").addEventListener("click", scheduleRefresh);
+  $("zoom-reset").addEventListener("click", () => {
+    timeWindow = null;
+    const node = $("time-plot");
+    if (node.on) Plotly.relayout(node, { "xaxis.autorange": true });
+    refreshTimeFigure().catch(() => {});
+  });
   $("measure").addEventListener("click", refreshMeasurements);
   for (const id of ["layout", "raw", "psd", "logx", "logy", "window", "detail"]) {
     $(id).addEventListener("change", scheduleRefresh);
+  }
+  for (const id of ["db", "f-min", "f-max"]) {
+    $(id).addEventListener("change", () => {
+      updateSpectrumControls();
+      scheduleRefresh();
+    });
   }
   for (const id of ["pair-panel", "chan-a", "chan-b", "chan-c", "vector-f"]) {
     $(id).addEventListener("change", () => {
@@ -982,6 +1266,7 @@ function wire() {
 async function start() {
   wire();
   updatePairControls();
+  updateSpectrumControls();
   openSocket();
 
   await loadInventory();

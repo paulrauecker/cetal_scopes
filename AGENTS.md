@@ -81,6 +81,15 @@ Read `docs/architecture.md` before changing the data model. In short:
   `sample_width="WORD"`; `BYTE` is a lossy top-byte truncation and still carries
   the comb. Use `analysis.remove_adc_comb()` for broadband work or analyze a
   band/tone rather than the global FFT peak.
+- M5i gotcha: a **channel** trigger's `level` is in volts referred to that
+  channel's input `range`, while the **external** (`EXT`) trigger's is in
+  volts at the connector (+/-5 V). Switching `trigger.source` from `EXT` to a
+  channel without also changing the level is the standard way to end up with
+  a trigger that can never fire -- `bench.toml` ships `level = 1.5` with
+  `range = 1.0`, which is legal for `EXT` and impossible for `CH0`/`CH1`.
+  `configure()` rejects it rather than letting `arm()` find out, because one
+  instrument failing to arm discards the *whole* shot (the orchestrator never
+  fires a half-armed set), so the other scope's data goes with it.
 
 ## Toolchain
 

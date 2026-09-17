@@ -53,5 +53,9 @@ offset = 0.0
 
 [instrument.settings.trigger]
 source = "EXT"             # the card's Ext0 "Trig In"; or "CH0" / "CH1"
-level = 1.5                # volts at the connector, within +/-5 V
+# Volts at the connector, within +/-5 V -- but ONLY while the source is EXT.
+# A channel source refers the level to that channel's `range` above (+/-1.0 V
+# here), so switching to "CH0"/"CH1" without lowering this is a trigger that
+# can never fire; connecting then refuses it.
+level = 1.5
 slope = "RISing"

@@ -611,3 +611,92 @@ def test_the_drawing_budget_is_clamped(client: TestClient) -> None:
     capture(client)
     figure = client.get("/api/figure?panel=fft&max_points=100000000").json()["figure"]
     assert all(len(trace["x"]) <= 20000 for trace in figure["data"])
+
+
+def test_the_inventory_says_which_drivers_take_a_panel_vdiv(
+    client: TestClient,
+) -> None:
+    # V/div and the shared "range" write the same instrument setting, and the
+    # driver rejects being told both for one channel, so the UI has to know
+    # which drivers have a panel vertical vocabulary at all.
+    payload = client.get("/api/inventory").json()
+
+    siglent = payload["vertical_drivers"]["siglent_sds6204l"]
+    assert siglent["divisions"] == 8
+    assert 0.5 in siglent["vdiv_ladder"]
+    # The M5i has no panel V/div; it takes "range" alone.
+    assert "spectrum_m5i3367" not in payload["vertical_drivers"]
+
+
+def test_a_per_channel_vdiv_survives_the_inventory_round_trip(
+    client: TestClient,
+) -> None:
+    inventory = client.get("/api/inventory").json()["inventory"]
+    instrument = inventory["instruments"][0]
+    instrument["driver"] = "siglent_sds6204l"
+    instrument["address"] = "192.0.2.1"
+    instrument["channels"] = ["C1", "C2"]
+    instrument["settings"] = {
+        "record_length": 1000,
+        "vertical": {"C1": {"scale": 0.05}, "C2": {"scale": 0.2, "probe": 10.0}},
+    }
+
+    response = client.put("/api/inventory", json={"inventory": inventory})
+
+    assert response.status_code == 200, response.text
+    stored = response.json()["inventory"]["instruments"][0]["settings"]["vertical"]
+    assert stored == {"C1": {"scale": 0.05}, "C2": {"scale": 0.2, "probe": 10.0}}
+
+
+def test_the_spectrum_band_and_db_are_reachable_over_http(client: TestClient) -> None:
+    capture(client)
+
+    banded = client.get("/api/figure?panel=fft&f_min=1e6&f_max=5e6").json()["figure"]
+    assert all(min(trace["x"]) >= 1e6 for trace in banded["data"])
+    assert all(max(trace["x"]) <= 5e6 for trace in banded["data"])
+
+    decibels = client.get("/api/figure?panel=fft&db=true").json()["figure"]
+    assert decibels["layout"]["yaxis"]["title"]["text"].startswith("dB")
+    # log_y defaults to true; dB has to override it.
+    assert decibels["layout"]["yaxis"]["type"] == "linear"
+
+
+def test_an_empty_band_explains_itself_rather_than_drawing_nothing(
+    client: TestClient,
+) -> None:
+    capture(client)
+
+    figure = client.get("/api/figure?panel=fft&f_min=1e15").json()["figure"]
+
+    assert figure["data"] == []
+    assert "frequency range" in figure["layout"]["annotations"][0]["text"]
+
+
+def test_a_zoom_window_is_reachable_over_http(client: TestClient) -> None:
+    capture(client)
+    shot = client.get("/api/shot").json()["shot"]
+    first = shot["captures"][0]
+    dt, t0 = first["dt"], first["t0"]
+
+    # 300 samples: far inside any budget, so every one should be drawn.
+    payload = client.get(
+        f"/api/figure?panel=time&t_min={t0 + 100 * dt}&t_max={t0 + 400 * dt}"
+    ).json()
+    meta = payload["figure"]["layout"]["meta"]
+
+    assert meta["decimated"] is False
+    assert meta["samples_in_window"] == meta["drawn_points"] == 301
+    assert meta["time_scale"] > 0
+
+
+def test_the_whole_record_reports_itself_as_decimated(client: TestClient) -> None:
+    capture(client)
+
+    meta = client.get("/api/figure?panel=time&max_points=200").json()["figure"][
+        "layout"
+    ]["meta"]
+
+    assert meta["decimated"] is True
+    assert meta["drawn_points"] <= 200
+    assert meta["samples_in_window"] > meta["drawn_points"]
+    assert meta["t_min"] is None and meta["t_max"] is None
