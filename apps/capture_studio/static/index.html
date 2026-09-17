@@ -13,6 +13,7 @@
   <header class="bar">
     <strong>Capture studio</strong>
     <span id="status" class="status">idle</span>
+    <span id="drawing" class="note" hidden>drawing…</span>
     <span class="spacer"></span>
     <button id="connect">Connect</button>
     <button id="capture" class="primary">Capture shot</button>
@@ -46,6 +47,28 @@
       <div id="time-plot" class="plot"></div>
     </section>
 
+    <section class="panel wide">
+      <div class="panel-head">
+        <h2>Instruments</h2>
+        <button id="inv-apply" title="Send this setup to the session. Applying disconnects the instruments; the next capture reconnects and reconfigures them.">Apply</button>
+        <button id="inv-save" title="Write the setup back to the inventory TOML">Save to file</button>
+        <button id="inv-add" class="small">Add</button>
+        <button id="inv-demo" class="small" title="Fill the editor with synthetic instruments; nothing is applied until you press Apply">Demo</button>
+        <button id="inv-reload" class="small" title="Discard edits and re-read the session's inventory">Reload</button>
+        <span id="inv-note" class="note"></span>
+      </div>
+      <div class="inv-run">
+        <label title="How finely the trigger wait is sliced, in seconds; also the abort latency">poll interval
+          <input id="inv-poll" type="number" step="any"></label>
+        <label title="Seconds to wait for a trigger when an instrument does not set its own">default timeout
+          <input id="inv-default-timeout" type="number" step="any"></label>
+        <label title="Seconds allowed for every instrument to reach the arm barrier">arm timeout
+          <input id="inv-arm-timeout" type="number" step="any"></label>
+        <span id="inv-path" class="note"></span>
+      </div>
+      <div id="inventory" class="inventory"></div>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <h2>Timing</h2>
@@ -62,6 +85,13 @@
         <label><input type="checkbox" id="psd"> PSD</label>
         <label><input type="checkbox" id="logx" checked> log f</label>
         <label><input type="checkbox" id="logy" checked> log y</label>
+        <label title="Points drawn per trace. The spectrum is binned to this, keeping each bin's extremes; analysis always uses the full record.">Detail
+          <select id="detail">
+            <option value="1500">fast</option>
+            <option value="4000" selected>normal</option>
+            <option value="12000">fine</option>
+          </select>
+        </label>
         <label>Window
           <select id="window">
             <option>hann</option><option>hamming</option>

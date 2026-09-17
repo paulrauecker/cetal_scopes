@@ -70,6 +70,7 @@ class StudioSession:
         self._shot: Shot | None = None
         self._offsets_fit: dict[str, TimeOffset] = {}
         self._pipeline: list[ProcessingStep] = []
+        self._processed: tuple[Any, dict[str, Channel], list[str]] | None = None
         self._log: list[dict[str, Any]] = []
         self._events: list[AcquisitionEvent] = []
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -205,6 +206,7 @@ class StudioSession:
         self._result = result
         self._shot = result.shot
         self._offsets_fit = {}
+        self._processed = None
         self._status.shot_id = result.shot_id
         self._status.complete = result.complete
         self._status.arm_spread_s = result.arm_spread_s
@@ -313,6 +315,7 @@ class StudioSession:
     def set_pipeline(self, steps: Sequence[ProcessingStep]) -> None:
         """Replace the processing pipeline."""
         self._pipeline = list(steps)
+        self._processed = None
         names = [step.name for step in self._pipeline if step.enabled]
         self._log_line(f"pipeline: {names or 'none'}")
 
@@ -333,13 +336,32 @@ class StudioSession:
         if not self._pipeline:
             return aligned, []
 
+        # One screen refresh asks for the traces, the spectrum, a two-channel
+        # panel and the measurements, and every one of them needs the same
+        # processed channels. Filtering a multi-megasample record four times
+        # over is most of the wait between a pipeline edit and the plots
+        # catching up, so the result is kept until something it depends on
+        # changes.
+        token = self._processed_token(shot)
+        if self._processed is not None and self._processed[0] == token:
+            return self._processed[1], self._processed[2]
+
         processed: dict[str, Channel] = {}
         warnings: list[str] = []
         for key, channel in aligned.items():
             result, notes = apply_pipeline(channel, self._pipeline)
             processed[key] = result
             warnings.extend(notes)
+        self._processed = (token, processed, warnings)
         return processed, warnings
+
+    def _processed_token(self, shot: Shot) -> Any:
+        """Everything the processed channels depend on, as a comparable key."""
+        return (
+            id(shot),
+            tuple(sorted(shot.offsets.items())),
+            tuple(step.model_dump_json() for step in self._pipeline),
+        )
 
     # -- persistence -------------------------------------------------------
 
@@ -362,6 +384,7 @@ class StudioSession:
         self._shot = shot
         self._result = None
         self._offsets_fit = {}
+        self._processed = None
         self._status.shot_id = str(shot.metadata.get("shot_id") or Path(path).name)
         self._status.complete = shot.metadata.get("complete")
         self._status.arm_spread_s = shot.metadata.get("arm_spread_s")

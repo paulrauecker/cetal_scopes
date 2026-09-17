@@ -12,6 +12,7 @@ moves its traces.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from itertools import pairwise
 from typing import Any, Literal
 
 import numpy as np
@@ -31,6 +32,7 @@ __all__ = [
     "LAYOUTS",
     "LayoutMode",
     "coherence_figure",
+    "decimate_spectrum",
     "empty_figure",
     "fft_figure",
     "measurement_table",
@@ -81,15 +83,42 @@ def _colour(index: int) -> str:
 
 
 def _base_layout(title: str, **overrides: Any) -> dict[str, Any]:
+    """A layout that leaves room for whatever it is given.
+
+    Everything here is about not drawing text on top of other text: the
+    legend sits *above* the plotting area rather than below it (where it
+    collided with the x-axis title on short panels), every axis carries
+    ``automargin`` so long tick labels and axis titles push the margin out
+    instead of overlapping, and ``autoexpand`` lets the legend do the same.
+    """
     layout: dict[str, Any] = {
-        "title": {"text": title},
-        "margin": {"l": 70, "r": 20, "t": 44, "b": 52},
+        "title": {"text": title, "x": 0, "xanchor": "left", "font": {"size": 13}},
+        "margin": {
+            "l": 64,
+            "r": 24,
+            "t": 52 if title else 34,
+            "b": 44,
+            "autoexpand": True,
+        },
         "hovermode": "closest",
         "showlegend": True,
-        "legend": {"orientation": "h", "y": -0.18},
+        "legend": {
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.0,
+            "xanchor": "right",
+            "x": 1.0,
+            "font": {"size": 11},
+        },
         "template": "plotly_white",
+        # Redraws keep the pan/zoom the operator set: refreshing after a
+        # pipeline tweak should not throw away the window they are looking at.
+        "uirevision": "studio",
     }
-    layout.update(overrides)
+    for key, value in overrides.items():
+        if key.startswith(("xaxis", "yaxis")) and isinstance(value, dict):
+            value = {"automargin": True, **value}
+        layout[key] = value
     return layout
 
 
@@ -196,8 +225,8 @@ def time_figure(
                     "type": "scattergl",
                     "mode": "lines",
                     "name": key,
-                    "x": (t / scale).tolist(),
-                    "y": values.tolist(),
+                    "x": _emit(t / scale, _AXIS_DIGITS),
+                    "y": _emit(values),
                     "line": {"color": _colour(index), "width": 1.2},
                     "xaxis": f"x{axis}",
                     "yaxis": f"y{axis}",
@@ -209,14 +238,18 @@ def time_figure(
             )
         bottom = row == n_rows
         figure_layout[f"xaxis{axis}"] = {
-            "title": {"text": f"time ({unit})"} if bottom else None,
+            "automargin": True,
             "showticklabels": bottom,
+            # Only the bottom row is labelled; a title on every row would sit
+            # on the row beneath it.
+            **({"title": {"text": f"time ({unit})"}} if bottom else {}),
             # Zoom on any subplot moves them all: the point of stacking these
             # is to compare the same instant across instruments.
             **({} if row == 1 else {"matches": "x"}),
         }
         figure_layout[f"yaxis{axis}"] = {
-            "title": {"text": group_name or _unit_of(members)},
+            "automargin": True,
+            "title": {"text": _row_title(group_name, members), "standoff": 6},
             "zeroline": True,
         }
 
@@ -226,9 +259,120 @@ def time_figure(
             "columns": 1,
             "pattern": "independent",
             "roworder": "top to bottom",
+            # Without a gap the rows share an edge, so one row's tick labels
+            # land on the next row's traces.
+            "ygap": 0.28,
         }
-        figure_layout["height"] = max(280, 170 * n_rows)
+        figure_layout["height"] = max(300, 190 * n_rows) + 40
     return {"data": data, "layout": figure_layout}
+
+
+def _row_title(group_name: str, members: Sequence[tuple[str, str, Channel]]) -> str:
+    """A row label short enough not to crowd the tick labels beside it."""
+    unit = _unit_of(members)
+    if not group_name:
+        return unit
+    # "siglent:C1" reads as "C1 (V)" once the row is already that channel's.
+    short = group_name.split(":", 1)[-1] if len(members) == 1 else group_name
+    return f"{short} ({unit})"
+
+
+def _emit(values: np.ndarray, digits: int = 6) -> list[float]:
+    """Render an array for JSON, rounded to a sane number of digits.
+
+    ``float64`` reprs are about 19 characters each, and a refresh sends tens
+    of thousands of them over what may well be a slow link to the bench.
+    Rounding to a fixed number of decimals -- chosen from the array's own
+    magnitude, so ``digits`` is significant digits -- roughly halves that, and
+    the digits dropped are well below both the ADC's resolution and the
+    screen's. The full-precision arrays are what every measurement and export
+    uses; this is only what gets drawn.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    finite = array[np.isfinite(array)]
+    largest = float(np.max(np.abs(finite))) if finite.size else 0.0
+    if largest > 0.0:
+        decimals = int(digits - 1 - np.floor(np.log10(largest)))
+        array = np.round(array, min(max(decimals, -12), 15))
+    return array.tolist()
+
+
+#: Axis values (time, frequency) keep more digits than sample values: a time
+#: axis spans microseconds at picosecond resolution, so six digits would
+#: quantise it coarser than the sample interval.
+_AXIS_DIGITS = 10
+
+
+def _envelope_at(
+    x: np.ndarray, y: np.ndarray, edges: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep each bin's minimum and maximum sample, in x order.
+
+    The same idea as :func:`~cetal_scopes.plotting.decimate_envelope`, but with
+    the bin edges given rather than uniform, which is what a log-frequency
+    axis needs.
+    """
+    kept: list[int] = []
+    for first, last in pairwise(edges):
+        start, end = int(first), int(last)
+        if end <= start:
+            continue
+        segment = y[start:end]
+        if not np.any(np.isfinite(segment)):
+            # An all-gap bin stays a gap: a transfer function is NaN where it
+            # is undefined, and joining across that would draw a line through
+            # frequencies that have no answer.
+            kept.append(start)
+            continue
+        low = start + int(np.nanargmin(segment))
+        high = start + int(np.nanargmax(segment))
+        if low == high:
+            kept.append(low)
+        else:
+            kept.extend(sorted((low, high)))
+    if not kept:
+        return x, y
+    index = np.asarray(kept, dtype=np.intp)
+    return x[index], y[index]
+
+
+def decimate_spectrum(
+    freq: np.ndarray,
+    values: np.ndarray,
+    max_points: int,
+    *,
+    log_x: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reduce a spectrum to at most ``max_points`` samples for drawing.
+
+    A full-rate spectrum is half the record: a 262144-sample capture gives
+    131072 points *per channel*, and six of those is an 18 MB JSON response
+    that the browser then has to parse and lay out. Nothing on a 1000-pixel
+    axis can show it, so the line is binned here instead.
+
+    Each bin keeps its minimum and its maximum, so a narrow spur still reaches
+    its true height and the width of the noise floor stays visible -- striding
+    would quietly drop both. Bins are geometric when the axis is logarithmic,
+    so the decades below the Nyquist frequency keep their detail.
+
+    Analysis always runs on the full spectrum; this only affects what is sent
+    to be drawn.
+    """
+    freq = np.asarray(freq, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    n = freq.size
+    if max_points < 8 or n <= max_points:
+        return freq, values
+
+    n_bins = max(4, max_points // 2)
+    if log_x and freq[0] > 0.0:
+        edge_values = np.geomspace(freq[0], freq[-1], n_bins + 1)
+        edges = np.searchsorted(freq, edge_values).astype(np.intp)
+        edges[0], edges[-1] = 0, n
+        edges = np.maximum.accumulate(edges)
+    else:
+        edges = np.linspace(0, n, n_bins + 1).astype(np.intp)
+    return _envelope_at(freq, values, edges)
 
 
 def _unit_of(members: Sequence[tuple[str, str, Channel]]) -> str:
@@ -248,8 +392,15 @@ def fft_figure(
     f_min: float | None = None,
     f_max: float | None = None,
     annotate_peak: bool = True,
+    max_points: int = 3000,
 ) -> dict[str, Any]:
-    """One-sided spectrum of every selected channel, on shared axes."""
+    """One-sided spectrum of every selected channel, on shared axes.
+
+    ``max_points`` is the per-trace drawing budget; see
+    :func:`decimate_spectrum` for what it does and why it is not optional in
+    practice. The peak annotation is measured on the full spectrum, before
+    any binning, so it reports the real peak rather than a binned one.
+    """
     selected = list(_iter_channels(shot, channels))
     if not selected:
         return empty_figure("No channels to transform.")
@@ -272,27 +423,37 @@ def fft_figure(
         if not mask.any():
             continue
 
+        visible_freq = freq[mask]
+        visible_values = values[mask]
+        drawn_freq, drawn_values = decimate_spectrum(
+            visible_freq, visible_values, max_points, log_x=log_x
+        )
         data.append(
             {
                 "type": "scattergl",
                 "mode": "lines",
                 "name": key,
-                "x": freq[mask].tolist(),
-                "y": values[mask].tolist(),
+                "x": _emit(drawn_freq, _AXIS_DIGITS),
+                "y": _emit(drawn_values),
                 "line": {"color": _colour(index), "width": 1.2},
                 "hovertemplate": f"{key}<br>%{{x:.5g}} Hz<br>%{{y:.5g}}<extra></extra>",
             }
         )
         if annotate_peak:
-            peak_index = int(np.argmax(values[mask]))
+            peak_index = int(np.argmax(visible_values))
             annotations.append(
                 {
-                    "x": float(freq[mask][peak_index]),
-                    "y": float(values[mask][peak_index]),
-                    "text": f"{freq[mask][peak_index]:.4g} Hz",
+                    "x": float(visible_freq[peak_index]),
+                    "y": float(visible_values[peak_index]),
+                    "text": f"{visible_freq[peak_index]:.4g} Hz",
                     "showarrow": True,
                     "arrowhead": 2,
                     "arrowsize": 0.7,
+                    # One label per channel, and their peaks are often on top
+                    # of each other; stack the labels so they stay readable.
+                    "ax": 0,
+                    "ay": -16 - 15 * len(annotations),
+                    "yanchor": "bottom",
                     "font": {"size": 10, "color": _colour(index)},
                     "arrowcolor": _colour(index),
                     "xref": "x",
@@ -326,6 +487,7 @@ def spectrogram_figure(
     segment_samples: int | None = None,
     window: str = "hann",
     db: bool = True,
+    max_freq_bins: int = 600,
 ) -> dict[str, Any]:
     """Short-time spectrum of one channel, as a heatmap.
 
@@ -346,6 +508,20 @@ def spectrogram_figure(
     spectrogram = stft(channel, segment_samples=segment, window=window)
 
     amplitude = np.asarray(spectrogram.amplitude, dtype=np.float64)
+    freq = np.asarray(spectrogram.freq, dtype=np.float64)
+    # A long record gives thousands of frequency bins, and a heatmap cell
+    # smaller than a screen pixel costs a megabyte to say nothing. Bin the
+    # frequency axis down by taking each bin's maximum, so a narrow line
+    # keeps its height instead of being averaged into the floor.
+    if freq.size > max_freq_bins:
+        edges = np.linspace(0, freq.size, max_freq_bins + 1).astype(np.intp)
+        groups = [
+            (int(first), int(last)) for first, last in pairwise(edges) if last > first
+        ]
+        amplitude = np.stack(
+            [amplitude[:, first:last].max(axis=1) for first, last in groups], axis=1
+        )
+        freq = np.asarray([freq[first:last].mean() for first, last in groups])
     if db:
         floor = float(np.max(amplitude)) * 1e-6 or 1e-18
         z = 20.0 * np.log10(np.maximum(amplitude, floor))
@@ -359,9 +535,9 @@ def spectrogram_figure(
         "data": [
             {
                 "type": "heatmap",
-                "x": (np.asarray(spectrogram.times) / scale).tolist(),
-                "y": np.asarray(spectrogram.freq).tolist(),
-                "z": z.T.tolist(),
+                "x": _emit(np.asarray(spectrogram.times) / scale, _AXIS_DIGITS),
+                "y": _emit(freq, _AXIS_DIGITS),
+                "z": [_emit(row, 4) for row in z.T],
                 "colorscale": "Viridis",
                 "colorbar": {"title": {"text": colorbar_title}},
                 "hovertemplate": (
@@ -398,18 +574,22 @@ def coherence_figure(
     *,
     processed: dict[str, Channel] | None = None,
     segment_samples: int | None = None,
+    max_points: int = 3000,
 ) -> dict[str, Any]:
     """Magnitude-squared coherence between two channels of the shot."""
     left, right = _pair(shot, a, b, processed)
     spectrum = _coherence(left, right, segment_samples=segment_samples)
+    freq, values = decimate_spectrum(
+        spectrum.freq, spectrum.psd, max_points, log_x=True
+    )
     return {
         "data": [
             {
                 "type": "scattergl",
                 "mode": "lines",
                 "name": f"{a} vs {b}",
-                "x": spectrum.freq.tolist(),
-                "y": spectrum.psd.tolist(),
+                "x": _emit(freq, _AXIS_DIGITS),
+                "y": _emit(values),
                 "line": {"color": _colour(0), "width": 1.2},
                 "hovertemplate": "%{x:.5g} Hz<br>%{y:.3f}<extra></extra>",
             }
@@ -430,6 +610,7 @@ def transfer_figure(
     *,
     processed: dict[str, Channel] | None = None,
     segment_samples: int | None = None,
+    max_points: int = 3000,
 ) -> dict[str, Any]:
     """Gain and phase from ``a`` to ``b``, with the coherence beneath them.
 
@@ -446,12 +627,13 @@ def transfer_figure(
     phase = np.where(finite, np.degrees(np.angle(gain)), np.nan)
 
     def trace(y: np.ndarray, name: str, axis: str, colour: str) -> dict[str, Any]:
+        x, values = decimate_spectrum(freq, y, max_points, log_x=True)
         return {
             "type": "scattergl",
             "mode": "lines",
             "name": name,
-            "x": freq.tolist(),
-            "y": [None if np.isnan(value) else float(value) for value in y],
+            "x": _emit(x, _AXIS_DIGITS),
+            "y": [None if np.isnan(value) else value for value in _emit(values)],
             "line": {"color": colour, "width": 1.2},
             "xaxis": "x",
             "yaxis": axis,
@@ -510,8 +692,8 @@ def xy_figure(
                 "type": "scattergl",
                 "mode": "lines",
                 "name": f"{b} vs {a}",
-                "x": x_values.tolist(),
-                "y": y_values.tolist(),
+                "x": _emit(x_values),
+                "y": _emit(y_values),
                 "line": {"color": _colour(0), "width": 1.0},
                 "hovertemplate": "%{x:.5g}<br>%{y:.5g}<extra></extra>",
             }

@@ -560,3 +560,54 @@ def test_without_a_prefix_the_app_is_returned_unwrapped(session: StudioSession) 
     app = create_app(session)
     assert with_root_path(app, "") is app
     assert with_root_path(app, "/") is app
+
+
+# ---------------------------------------------------------------------------
+# Drawing cost
+# ---------------------------------------------------------------------------
+
+
+def test_processed_channels_are_reused_across_a_refresh(
+    session: StudioSession, client: TestClient
+) -> None:
+    # One screen refresh asks four endpoints for the same processed channels;
+    # filtering the whole shot once per panel is most of the wait.
+    capture(client)
+    client.put(
+        "/api/processing",
+        json={"steps": [{"name": "lowpass", "params": {"cutoff": 5e7}}]},
+    )
+
+    first, _ = session.processed_channels()
+    second, _ = session.processed_channels()
+    assert second is first
+
+
+@pytest.mark.parametrize(
+    ("mutate", "kwargs"),
+    [
+        ("set_offsets", {"offsets": {"demo2": 5e-9}}),
+        ("set_pipeline", {"steps": []}),
+    ],
+)
+def test_the_processed_cache_follows_what_it_depends_on(
+    session: StudioSession, client: TestClient, mutate: str, kwargs: dict[str, Any]
+) -> None:
+    capture(client)
+    client.put(
+        "/api/processing",
+        json={"steps": [{"name": "lowpass", "params": {"cutoff": 5e7}}]},
+    )
+    first, _ = session.processed_channels()
+
+    getattr(session, mutate)(**kwargs)
+
+    assert session.processed_channels()[0] is not first
+
+
+def test_the_drawing_budget_is_clamped(client: TestClient) -> None:
+    # It is a drawing budget, not an analysis parameter: an unbounded value
+    # is a response the browser cannot draw.
+    capture(client)
+    figure = client.get("/api/figure?panel=fft&max_points=100000000").json()["figure"]
+    assert all(len(trace["x"]) <= 20000 for trace in figure["data"])

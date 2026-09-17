@@ -313,3 +313,36 @@ def test_offset_is_symmetric_for_unequal_length_records() -> None:
 
     assert forward.offset == pytest.approx(250 * dt, abs=dt)
     assert backward.offset == pytest.approx(-250 * dt, abs=dt)
+
+
+def test_align_shot_puts_one_event_at_one_time_across_sample_rates() -> None:
+    # The question this answers is the whole point of a shot: two instruments
+    # at different sample rates *and* different pretriggers digitize one
+    # event, and the aligned time axes must agree about when it happened.
+    # Both halves matter -- the rates differ, so the event lands on a
+    # different sample index in each record, and the pretriggers differ, so
+    # the records start at different absolute times.
+    skew = 37e-9  # the second instrument's trigger fires this much late
+
+    def capture(dt: float, n: int, t0: float, shift: float) -> Capture:
+        tau = (t0 + np.arange(n, dtype=np.float64) * dt) - (1.234e-6 - shift)
+        envelope = np.exp(-0.5 * (tau / 30e-9) ** 2)
+        return Capture(
+            volts=(np.sin(2 * np.pi * 1.5e8 * tau) * envelope)[None, :], t0=t0, dt=dt
+        )
+
+    shot = Shot()
+    shot.add("fast", capture(2e-10, 40000, -4e-6, 0.0))
+    shot.add("slow", capture(5e-10, 20000, -5e-6, skew))
+
+    offsets = align_shot(shot)
+    assert offsets["slow"].correlation > 0.9
+    assert offsets["slow"].offset == pytest.approx(skew, abs=5e-10)
+
+    peaks = [
+        channel.time[int(np.argmax(channel.volts))]
+        for channel in shot.aligned_channels().values()
+    ]
+    # Within one sample of the coarser instrument: the peak can only be
+    # located to the grid it was recorded on.
+    assert max(peaks) - min(peaks) == pytest.approx(0.0, abs=5e-10)
