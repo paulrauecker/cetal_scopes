@@ -215,6 +215,31 @@ def test_every_layout_renders(client: TestClient, layout: str) -> None:
     json.dumps(payload)  # the whole thing must be JSON-serialisable
 
 
+@pytest.mark.parametrize("panel", ["time", "fft"])
+def test_a_channel_selection_narrows_the_all_channel_panels(
+    client: TestClient, panel: str
+) -> None:
+    capture(client)
+    selection = "demo1:CH1,demo2:CH2"
+    payload = client.get(f"/api/figure?panel={panel}&channels={selection}").json()
+
+    names = [trace["name"] for trace in payload["figure"]["data"]]
+    assert names == ["demo1:CH1", "demo2:CH2"]
+
+
+@pytest.mark.parametrize("panel", ["time", "fft"])
+def test_an_empty_channel_selection_draws_nothing(
+    client: TestClient, panel: str
+) -> None:
+    # Distinct from omitting the parameter, which draws every channel: this is
+    # what the UI sends once every channel has been toggled off.
+    capture(client)
+    payload = client.get(f"/api/figure?panel={panel}&channels=").json()
+
+    assert payload["figure"]["data"] == []
+    assert client.get(f"/api/figure?panel={panel}").json()["figure"]["data"]
+
+
 def test_an_unknown_layout_is_refused(client: TestClient) -> None:
     capture(client)
     assert client.get("/api/figure?panel=time&layout=spiral").status_code == 422

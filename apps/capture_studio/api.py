@@ -293,7 +293,9 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
             raise HTTPException(400, f"unknown layout {layout!r}")
 
         shot = session.shot
-        selection = channels.split(",") if channels else None
+        # An explicit empty ``channels=`` means none, not all: it is what the
+        # UI sends when every channel has been toggled off.
+        selection = channels.split(",") if channels is not None else None
         if raw:
             processed, warnings = None, []
         else:

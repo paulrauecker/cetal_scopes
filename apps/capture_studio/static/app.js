@@ -4,6 +4,9 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   shot: null,
+  // Keys the user switched off. Hiding rather than listing what is shown
+  // means a new shot's channels arrive visible.
+  hidden: new Set(),
   status: {},
   catalog: [],
   pipeline: [],
@@ -77,6 +80,46 @@ function fillChannelPickers() {
     else if (id === "chan-b" && keys.length > 1) select.value = keys[1];
     else if (id === "chan-c" && keys.length > 2) select.value = keys[2];
   }
+}
+
+function visibleChannels() {
+  return channelKeys().filter((key) => !state.hidden.has(key));
+}
+
+function renderChannelToggles() {
+  const host = $("channel-toggles");
+  host.innerHTML = "";
+  if (!state.shot) return;
+
+  for (const capture of state.shot.captures) {
+    const name = document.createElement("span");
+    name.className = "capture-name";
+    name.textContent = capture.label;
+    host.append(name);
+
+    for (const key of capture.keys) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = !state.hidden.has(key);
+      box.addEventListener("change", () => {
+        if (box.checked) state.hidden.delete(key);
+        else state.hidden.add(key);
+        refreshFigures();
+      });
+
+      const label = document.createElement("label");
+      label.append(box, key.split(":").slice(1).join(":") || key);
+      label.title = key;
+      host.append(label);
+    }
+  }
+}
+
+function setAllChannels(visible) {
+  if (visible) state.hidden.clear();
+  else for (const key of channelKeys()) state.hidden.add(key);
+  renderChannelToggles();
+  refreshFigures();
 }
 
 function updatePairControls() {
@@ -287,16 +330,21 @@ async function drawFigure(target, query) {
 async function refreshFigures() {
   if (!state.shot) return;
   const raw = $("raw").checked ? "true" : "false";
+  // Always explicit: an empty value means none, which is what an empty
+  // selection should draw.
+  const channels = visibleChannels().join(",");
 
   const warnings = await drawFigure("time-plot", {
     panel: "time",
     layout: $("layout").value,
+    channels,
     raw,
   });
   $("pipeline-warnings").textContent = warnings.join(" · ");
 
   await drawFigure("fft-plot", {
     panel: "fft",
+    channels,
     psd: $("psd").checked,
     log_x: $("logx").checked,
     log_y: $("logy").checked,
@@ -381,6 +429,7 @@ function adoptShot(payload) {
   if (payload.status) applyStatus(payload.status);
   if (payload.shot !== undefined) state.shot = payload.shot;
   fillChannelPickers();
+  renderChannelToggles();
   renderOffsets();
   renderInstruments();
   renderShotMeta();
@@ -465,6 +514,8 @@ function wire() {
     applyStatus(await post("api/disconnect"));
   });
   $("abort").addEventListener("click", () => post("api/abort"));
+  $("channels-all").addEventListener("click", () => setAllChannels(true));
+  $("channels-none").addEventListener("click", () => setAllChannels(false));
   $("capture").addEventListener("click", async () => {
     const payload = await post("api/capture", {
       direct_trigger: $("direct").checked ? true : null,

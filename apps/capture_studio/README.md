@@ -126,8 +126,11 @@ Each capture has its own clock, so they need putting on a common axis.
   row per channel. Stacked rows share the x-axis, so zoom moves them together.
   Long records are drawn through a min/max envelope, so a one-sample spike
   survives decimation instead of being aliased away.
+  The **Channels** row toggles which channels the traces and the spectrum draw;
+  it is a display filter only, so processing, measurements and export still see
+  the whole shot. Channels of a later shot arrive visible.
 - **Spectrum** — FFT per channel, amplitude or PSD, log or linear, selectable
-  window, peak annotated.
+  window, peak annotated. Follows the Traces panel's channel toggles.
 - **Two-channel** — coherence, transfer function (gain, phase, and the
   coherence beneath them, because a transfer function has a value at every
   frequency whether or not the channels are related there), XY, a spectrogram,

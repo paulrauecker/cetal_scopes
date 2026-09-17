@@ -130,3 +130,16 @@ td.state-bad { color: var(--bad); }
   background: var(--bg);
   white-space: pre-wrap;
 }
+
+.channel-toggles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.channel-list { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.channel-list label { white-space: nowrap; }
+.channel-list .capture-name { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.channel-list .capture-name:first-child { margin-left: 0; }
