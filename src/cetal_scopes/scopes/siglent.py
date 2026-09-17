@@ -28,6 +28,7 @@ from cetal_scopes.scopes._settings import (
 from cetal_scopes.scopes.base import Scope
 
 __all__ = [
+    "DEFAULT_INTERPOLATION",
     "VDIV_LADDER",
     "AcquisitionPlan",
     "SiglentSDS6204L",
@@ -54,6 +55,7 @@ _PANEL_KEYS = frozenset(
         "timebase",
         "delay",
         "acquire_type",
+        "interpolation",
         "memory_depth",
         "trigger",
         "trigger_mode",
@@ -308,12 +310,41 @@ MDEPTH_ENUM: tuple[tuple[int, str], ...] = (
 )
 
 
+#: Interpolation state this driver asserts unless ``configure()`` overrides it.
+#: ``sin(x)/x`` reconstruction (Siglent's "enhanced sample rate", ESR) invents
+#: samples between the ones the ADC actually took, which is a post-processing
+#: choice rather than an acquisition one -- so it is off by default, to be
+#: applied deliberately downstream where it is visible in the code.
+DEFAULT_INTERPOLATION = "OFF"
+
+
 def snap_mdepth(samples: int) -> str:
     """Snap a sample count up to the next :data:`MDEPTH_ENUM` step (clamped to the ends)."""
     for value, label in MDEPTH_ENUM:
         if value >= samples:
             return label
     return MDEPTH_ENUM[-1][1]
+
+
+def _normalize_interpolation(value: object) -> str:
+    """Normalize an ``interpolation`` setting to the SCPI ``ON``/``OFF`` token.
+
+    ``OFF`` is linear reconstruction between acquired samples; ``ON`` is the
+    ``sin(x)/x`` reconstruction that Siglent markets as the "enhanced sample
+    rate" (ESR). Neither adds measured information, so this driver defaults
+    to ``OFF`` -- see :data:`DEFAULT_INTERPOLATION`.
+    """
+    if isinstance(value, bool):
+        return "ON" if value else "OFF"
+    token = str(value).strip().upper()
+    if token in {"ON", "SINX", "SIN(X)/X"}:
+        return "ON"
+    if token in {"OFF", "LINEAR", "LIN"}:
+        return "OFF"
+    raise ValueError(
+        f"unsupported interpolation {value!r}; expected 'ON' (sin(x)/x) or "
+        "'OFF' (linear)"
+    )
 
 
 def _impedance_ohms_to_string(ohms: float) -> str:
@@ -711,6 +742,7 @@ class SiglentSDS6204L(Scope):
         self._owns_transport = transport is None
         self._connected = False
         self._idn = ""
+        self._interpolation = DEFAULT_INTERPOLATION
         self._last_sample_rate: float | None = None
         self._last_window_s: float | None = None
         self._last_record_length: int | None = None
@@ -784,7 +816,8 @@ class SiglentSDS6204L(Scope):
         """Apply acquisition settings.
 
         Accepts this driver's panel-native keys -- ``channels``,
-        ``timebase``, ``delay``, ``acquire_type``, ``memory_depth``,
+        ``timebase``, ``delay``, ``acquire_type``, ``interpolation``,
+        ``memory_depth``,
         ``trigger`` (mapping with ``source``/``level``/``slope``), and
         ``vertical`` (mapping of channel name to
         ``scale``/``offset``/``coupling``/``probe``/``bandwidth_limit``/
@@ -816,6 +849,9 @@ class SiglentSDS6204L(Scope):
             )
         if "acquire_type" in settings:
             self.set_acquire_type(str(settings["acquire_type"]))
+        if "interpolation" in settings:
+            self._interpolation = _normalize_interpolation(settings["interpolation"])
+        self.set_interpolation(self._interpolation)
         if "memory_depth" in settings:
             self.set_memory_depth(str(settings["memory_depth"]))
         if "trigger_mode" in settings:
@@ -1035,6 +1071,19 @@ class SiglentSDS6204L(Scope):
     def set_acquire_type(self, acquire_type: str) -> None:
         """Set the acquisition type (e.g. ``NORMal``, ``AVERage,16``)."""
         self._write(f":ACQuire:TYPE {acquire_type}")
+
+    def set_interpolation(self, state: str) -> None:
+        """Set waveform interpolation (``ON`` = ``sin(x)/x``, ``OFF`` = linear)."""
+        self._write(f":ACQuire:INTerpolation {_normalize_interpolation(state)}")
+
+    def sample_rate(self) -> float:
+        """Query the sample rate the instrument will actually use (S/s).
+
+        Sample rate is not directly settable on this scope -- it falls out of
+        timebase and memory depth -- so this readback, not the requested
+        value, is what the acquisition will run at.
+        """
+        return float(self._query(":ACQuire:SRATe?"))
 
     def set_memory_depth(self, depth: str) -> None:
         """Set the maximum memory depth (e.g. ``10k``, ``1M``, ``10M``)."""

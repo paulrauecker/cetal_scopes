@@ -645,16 +645,48 @@ function adoptShot(payload) {
   renderShotMeta();
 }
 
+// What the inventory asked this instrument for, so the achieved numbers can
+// be shown against it. Sample rate is not directly settable on every scope
+// (the Siglent derives it from timebase x memory depth), so a mismatch here
+// is normal -- but it should be visible rather than silent.
+function requestedFor(label) {
+  const item = (state.inventory?.instruments ?? []).find(
+    (entry) => entry.label === label,
+  );
+  const settings = item?.settings ?? {};
+  return {
+    sample_rate: Number(settings.sample_rate) || null,
+    record_length: Number(settings.record_length) || null,
+  };
+}
+
+// Within a quarter percent counts as "as asked": the scope reports its rate
+// to a few digits and our own dt round-trips through a float.
+function matches(actual, asked) {
+  return asked == null || Math.abs(actual - asked) <= 0.0025 * asked;
+}
+
 function renderShotMeta() {
   if (!state.shot) {
     $("shot-meta").textContent = "";
     return;
   }
-  const parts = state.shot.captures.map(
-    (capture) =>
+  const parts = state.shot.captures.map((capture) => {
+    const asked = requestedFor(capture.label);
+    const rate = `${(capture.sample_rate / 1e6).toPrecision(4)} MS/s`;
+    const notes = [];
+    if (!matches(capture.sample_rate, asked.sample_rate)) {
+      notes.push(`asked ${(asked.sample_rate / 1e6).toPrecision(4)} MS/s`);
+    }
+    if (!matches(capture.n_samples, asked.record_length)) {
+      notes.push(`asked ${asked.record_length} pts`);
+    }
+    const flag = notes.length ? ` ⚠ ${notes.join(", ")}` : "";
+    return (
       `${capture.label}: ${capture.channels.length} ch, ` +
-      `${capture.n_samples} pts @ ${(capture.sample_rate / 1e6).toPrecision(4)} MS/s`,
-  );
+      `${capture.n_samples} pts @ ${rate}${flag}`
+    );
+  });
   $("shot-meta").textContent = parts.join(" · ");
 }
 
