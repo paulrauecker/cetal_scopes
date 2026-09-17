@@ -144,6 +144,20 @@ class InstrumentConfig(_Model):
             deepest = driver.max_record_length(n_channels)
             if deepest is not None:
                 settings["record_length"] = deepest
+
+        # A window is what pretrigger is a fraction *of*, so asking for one
+        # without it is not something the instrument can act on. The driver
+        # says so too, but only at connect time and without naming the file
+        # or the instrument, which reads like a bug rather than a setting.
+        if "pretrigger" in settings and not (
+            "sample_rate" in settings or "record_length" in settings
+        ):
+            raise ValueError(
+                f"{self.label}: 'pretrigger' needs a window to be a fraction "
+                f"of, but driver {self.driver!r} cannot report its own "
+                "sample-rate or record-length ceiling, so neither could be "
+                "filled in. Set 'sample_rate' and 'record_length' explicitly."
+            )
         return settings
 
     def build(self) -> InstrumentSpec:
