@@ -22,7 +22,10 @@ acquire_timeout = 10.0
 # sample_rate omitted on purpose: an absent rate means "as fast as this
 # instrument goes", which the driver answers (5 GS/s per channel here, and it
 # does not drop when more channels are on -- each has its own converter).
-record_length = 1000000    # an exact MDEPTH step; 200 us at 5 GS/s
+record_length = "50us"     # a time suffix means a window: the sample count
+                           # follows the resolved rate, so a faster rate buys
+                           # more samples over the same window, not less time.
+                           # Write a bare number for a literal sample count.
 pretrigger = 0.5
 range = 0.01               # weak signals: snaps to 5 mV/div, so +/-20 mV
 offset = 0.0
@@ -50,8 +53,9 @@ acquire_timeout = 10.0
 # sample_rate omitted on purpose: an absent rate means "as fast as this
 # instrument goes". This card interleaves, so the ceiling follows the channel
 # list above -- 5 GS/s with both, 10 GS/s the moment one is removed, with no
-# other edit. A fixed record_length then halves the window when that happens.
-record_length = 1000000    # multiple of 32; 200 us at 5 GS/s, same as the siglent
+# other edit. Because the window is fixed below, that buys twice the samples
+# over the same 50 us rather than halving the window.
+record_length = "50us"     # same window as the siglent, so the two line up
 pretrigger = 0.5
 range = 0.2                # the card's most sensitive step; 0.2/0.5/1.0/2.5 V
 offset = 0.0

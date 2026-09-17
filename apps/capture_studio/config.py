@@ -7,6 +7,7 @@ memory and can write it back.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -26,6 +27,7 @@ __all__ = [
     "demo_inventory",
     "dumps_toml",
     "load_inventory",
+    "parse_duration",
     "parse_inventory",
     "save_inventory",
 ]
@@ -127,6 +129,18 @@ class InstrumentConfig(_Model):
         The ceiling depends on the channel count, so dropping a channel from
         an interleaved digitiser raises the rate on the next connect with no
         other edit -- which is the point.
+
+        ``window`` (seconds) is resolved here rather than sent on: it is how
+        you say "this much time, at whatever rate the instrument can manage",
+        which is the useful way round when rate matters more than record
+        length. It becomes ``record_length = window * sample_rate`` once the
+        rate is known, so raising the rate buys more samples over the same
+        window instead of a shorter one.
+
+        With neither ``record_length`` nor ``window`` given, the *shortest*
+        record the instrument takes is used. Record length buys no resolution
+        once the rate is at its ceiling -- it only sets how much time the shot
+        covers, and every extra sample costs transfer time on every shot.
         """
         settings = dict(self.settings)
         if self.channels:
@@ -134,16 +148,50 @@ class InstrumentConfig(_Model):
             # takes channels both ways must not be told two different things.
             settings.setdefault("channels", list(self.channels))
 
+        window = settings.pop("window", None)
+        if window is not None:
+            window = _as_window(window, label=self.label, field="window")
+
+        # A record length written with a time suffix -- record_length = "50us"
+        # -- is a window, said in the place people reach for first.
+        length = settings.get("record_length")
+        if isinstance(length, str):
+            as_time = _as_window(length, label=self.label, field="record_length")
+            if window is not None:
+                raise ValueError(
+                    f"{self.label}: 'record_length' is a duration "
+                    f"({length!r}) and 'window' is also set; give one."
+                )
+            window = as_time
+            del settings["record_length"]
+
+        if window is not None and "record_length" in settings:
+            raise ValueError(
+                f"{self.label}: give 'window' or 'record_length', not both -- "
+                "the window is the record length divided by the sample rate."
+            )
+
         driver = driver_class(self.driver)
         n_channels = len(self.channels)
         if "sample_rate" not in settings:
             ceiling = driver.max_sample_rate(n_channels)
             if ceiling is not None:
                 settings["sample_rate"] = ceiling
-        if "record_length" not in settings:
-            deepest = driver.max_record_length(n_channels)
-            if deepest is not None:
-                settings["record_length"] = deepest
+
+        if window is not None:
+            rate = settings.get("sample_rate")
+            if rate is None:
+                raise ValueError(
+                    f"{self.label}: 'window' needs a sample rate to become a "
+                    f"record length, and driver {self.driver!r} cannot report "
+                    "its own ceiling. Set 'sample_rate', or give "
+                    "'record_length' instead of 'window'."
+                )
+            settings["record_length"] = max(1, round(window * float(rate)))
+        elif "record_length" not in settings:
+            shortest = driver.min_record_length(n_channels)
+            if shortest is not None:
+                settings["record_length"] = shortest
 
         # A window is what pretrigger is a fraction *of*, so asking for one
         # without it is not something the instrument can act on. The driver
@@ -178,6 +226,52 @@ class InstrumentConfig(_Model):
             direct_trigger=self.direct_trigger,
             required=self.required,
         )
+
+
+#: Time suffixes accepted wherever a duration is written as a string, and
+#: what each is worth in seconds. Both spellings of "micro" are here because
+#: one of them is what a keyboard produces and the other is what physics
+#: writes; neither should be a syntax error.
+_TIME_UNITS: dict[str, float] = {
+    "s": 1.0,
+    "ms": 1e-3,
+    "us": 1e-6,
+    "\u00b5s": 1e-6,  # MICRO SIGN
+    "\u03bcs": 1e-6,  # GREEK SMALL LETTER MU
+    "ns": 1e-9,
+    "ps": 1e-12,
+}
+
+_DURATION_RE = re.compile(
+    r"^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*([a-z\u00b5\u03bc]+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_duration(value: str) -> float:
+    """Seconds from a string like ``"50us"``, ``"1.5 ms"`` or ``"2e-6 s"``.
+
+    Raises
+    ------
+    ValueError
+        If the string is not a number followed by a known time unit.
+    """
+    match = _DURATION_RE.match(value)
+    unit = match.group(2).lower() if match else None
+    if match is None or unit not in _TIME_UNITS:
+        raise ValueError(
+            f"cannot read {value!r} as a duration; expected a number and one "
+            f"of {sorted(_TIME_UNITS)} (e.g. '50us')"
+        )
+    return float(match.group(1)) * _TIME_UNITS[unit]
+
+
+def _as_window(value: Any, *, label: str, field: str) -> float:
+    """A duration in seconds from a number or a suffixed string."""
+    seconds = parse_duration(value) if isinstance(value, str) else float(value)
+    if seconds <= 0:
+        raise ValueError(f"{label}: {field!r} must be positive, got {value!r}")
+    return seconds
 
 
 def _address_keyword(driver: str) -> str:

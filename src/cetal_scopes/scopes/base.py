@@ -118,11 +118,15 @@ class Scope(ABC):
         return None
 
     @classmethod
-    def max_record_length(cls, n_channels: int) -> int | None:
-        """The deepest record this instrument can take, or ``None`` if unknown.
+    def min_record_length(cls, n_channels: int) -> int | None:
+        """The shortest record this instrument will take, or ``None`` if unknown.
 
-        See :meth:`max_sample_rate`. Note that the deepest record is rarely
-        the one you want: it is also the slowest to transfer.
+        The *shortest*, not the deepest, because this is what answers "no
+        record length was given". Record length does not buy resolution --
+        with the rate already at its ceiling it only sets how long a window
+        the shot covers, and a long one costs transfer time on every shot.
+        The deepest record is never a sensible default: on the Siglent it is
+        1 Gpt, a 200 ms window and gigabytes over the socket.
         """
         return None
 

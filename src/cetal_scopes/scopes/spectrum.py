@@ -485,6 +485,11 @@ class SpectrumM5i3367(Scope):
         """
         return snap_sample_rate(float("inf"), n_channels=n_channels)
 
+    @classmethod
+    def min_record_length(cls, n_channels: int) -> int | None:
+        """One :data:`MEMSIZE_STEP`, the hardware's record-length grid."""
+        return MEMSIZE_STEP
+
     def connect(self) -> None:
         """Open the card and identify it."""
         if self._connected:
