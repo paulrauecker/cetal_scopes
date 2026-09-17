@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import uvicorn
-from api import create_app
+from api import create_app, normalise_root_path, with_root_path
 from config import demo_inventory, load_inventory
 from session import StudioSession
 
@@ -56,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="Bind address.")
     parser.add_argument("--port", type=int, default=8000, help="Bind port.")
     parser.add_argument(
+        "--root-path",
+        default="",
+        help=(
+            "URL prefix the app is served under by a reverse proxy that does "
+            "not strip it, e.g. /node/pc-oscilloscope/8000 for Open OnDemand."
+        ),
+    )
+    parser.add_argument(
         "--log-level", default="warning", help="uvicorn log level (default: warning)."
     )
     return parser
@@ -89,9 +97,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path = None
 
     session = StudioSession(inventory, config_path=config_path)
-    app = create_app(session)
+    root_path = normalise_root_path(args.root_path)
+    app = with_root_path(create_app(session, root_path), root_path)
 
-    print(f"capture studio on http://{args.host}:{args.port}")
+    print(f"capture studio on http://{args.host}:{args.port}{root_path}/")
     print(f"instruments: {', '.join(item.label for item in inventory.enabled)}")
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return 0

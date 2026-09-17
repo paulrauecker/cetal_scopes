@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
-from api import create_app
+from api import create_app, normalise_root_path, with_root_path
 from config import demo_inventory
 from fastapi.testclient import TestClient
 from session import StudioSession
@@ -500,3 +500,38 @@ def test_export_without_a_shot_is_refused(client: TestClient) -> None:
 def test_an_unknown_export_format_is_refused(client: TestClient) -> None:
     capture(client)
     assert client.get("/api/export?format=png").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Serving under a URL prefix
+# ---------------------------------------------------------------------------
+
+
+def test_the_page_is_served_with_a_relative_base(client: TestClient) -> None:
+    body = client.get("/").text
+    assert '<base href="/">' in body
+    assert 'href="static/styles.css"' in body
+
+
+@pytest.mark.parametrize("prefix", ["/node/pc-oscilloscope/8000", "node/host/8000/"])
+def test_a_prefixed_app_serves_every_route_below_the_prefix(
+    session: StudioSession, prefix: str
+) -> None:
+    root = normalise_root_path(prefix)
+    app = with_root_path(create_app(session, prefix), prefix)
+
+    with TestClient(app) as client:
+        page = client.get(f"{root}/")
+        assert page.status_code == 200
+        assert f'<base href="{root}/">' in page.text
+        assert client.get(f"{root}/api/status").status_code == 200
+        assert client.get(f"{root}/static/app.js").status_code == 200
+        # Unprefixed paths still work, so the host itself can reach the app
+        # on the bind address without going through the proxy.
+        assert client.get("/api/status").status_code == 200
+
+
+def test_without_a_prefix_the_app_is_returned_unwrapped(session: StudioSession) -> None:
+    app = create_app(session)
+    assert with_root_path(app, "") is app
+    assert with_root_path(app, "/") is app

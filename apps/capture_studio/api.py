@@ -11,7 +11,7 @@ from typing import Any, Literal
 from config import demo_inventory, parse_inventory
 from export import export_shot
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from figures import (
     LAYOUTS,
@@ -32,7 +32,7 @@ from session import StudioSession
 
 from cetal_scopes.scopes.registry import DRIVERS
 
-__all__ = ["create_app"]
+__all__ = ["create_app", "normalise_root_path", "with_root_path"]
 
 STATIC = Path(__file__).parent / "static"
 
@@ -86,8 +86,44 @@ def _error(exc: Exception, status: int = 400) -> HTTPException:
     return HTTPException(status_code=status, detail=str(exc))
 
 
-def create_app(session: StudioSession) -> FastAPI:
-    """Build the application around an existing :class:`StudioSession`."""
+def normalise_root_path(root_path: str) -> str:
+    """Return *root_path* as a bare prefix: leading slash, no trailing one."""
+    prefix = root_path.strip().strip("/")
+    return f"/{prefix}" if prefix else ""
+
+
+def with_root_path(app: FastAPI, root_path: str) -> Any:
+    """Serve *app* under *root_path*.
+
+    Reverse proxies that mount an app at a URL prefix come in two kinds: those
+    that strip the prefix before forwarding, and those that pass the request
+    path through untouched. Open OnDemand's ``/node/<host>/<port>/`` proxy is
+    the second kind, so the prefix has to come off here. Note that only the
+    path is rewritten -- setting the ASGI ``root_path`` as well makes Starlette
+    miss the ``/static`` mount.
+    """
+    prefix = normalise_root_path(root_path)
+    if not prefix:
+        return app
+
+    async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] in ("http", "websocket"):
+            path = scope["path"]
+            if path == prefix or path.startswith(f"{prefix}/"):
+                scope = dict(scope, path=path[len(prefix) :] or "/")
+        await app(scope, receive, send)
+
+    return wrapper
+
+
+def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
+    """Build the application around an existing :class:`StudioSession`.
+
+    *root_path* is the URL prefix the page will be served under; it is baked
+    into the page's ``<base>`` so the browser asks for ``api/...`` and
+    ``static/...`` below the prefix. Use :func:`with_root_path` to route it.
+    """
+    base = f"{normalise_root_path(root_path)}/"
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -357,8 +393,9 @@ def create_app(session: StudioSession) -> FastAPI:
     # -- static ------------------------------------------------------------
 
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html")
+    def index() -> HTMLResponse:
+        page = (STATIC / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(page.replace('<base href="/">', f'<base href="{base}">'))
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

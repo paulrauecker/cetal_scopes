@@ -24,6 +24,21 @@ uv run apps/capture_studio/capture_studio.py --config bench.toml
 
 Then open <http://127.0.0.1:8000>.
 
+### Behind a reverse proxy
+
+`--root-path` serves the app under a URL prefix that the proxy passes through
+untouched, as Open OnDemand's node proxy does:
+
+```bash
+uv run apps/capture_studio/capture_studio.py --demo \
+    --host 0.0.0.0 --root-path /node/pc-oscilloscope/8000
+```
+
+The prefix is stripped from incoming paths and baked into the page's `<base>`,
+so the API, the static files and the WebSocket all follow it. Unprefixed paths
+keep working, so the host itself can still reach the app on the bind address.
+There is no authentication in the app -- put it behind one.
+
 ## The inventory
 
 A run is defined by a TOML file rather than by whatever was typed into a form,

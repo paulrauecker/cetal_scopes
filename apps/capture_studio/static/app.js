@@ -117,7 +117,7 @@ function renderOffsets() {
     input.addEventListener("change", async () => {
       const offsets = {};
       offsets[capture.label] = Number(input.value) * 1e-9;
-      const payload = await post("/api/shot/offsets", { offsets });
+      const payload = await post("api/shot/offsets", { offsets });
       adoptShot(payload);
       await refreshFigures();
     });
@@ -266,7 +266,7 @@ function renderPipeline() {
 }
 
 async function savePipeline() {
-  const payload = await put("/api/processing", { steps: state.pipeline });
+  const payload = await put("api/processing", { steps: state.pipeline });
   state.pipeline = payload.steps;
   renderPipeline();
   await refreshFigures();
@@ -278,7 +278,7 @@ async function savePipeline() {
 const PLOT_CONFIG = { responsive: true, displaylogo: false };
 
 async function drawFigure(target, query) {
-  const payload = await api(`/api/figure?${new URLSearchParams(query)}`);
+  const payload = await api(`api/figure?${new URLSearchParams(query)}`);
   const figure = payload.figure;
   Plotly.react(target, figure.data, figure.layout, PLOT_CONFIG);
   return payload.warnings || [];
@@ -335,7 +335,7 @@ async function refreshPairFigure() {
 }
 
 async function refreshMeasurements() {
-  const payload = await api(`/api/measurements?raw=${$("raw").checked}`);
+  const payload = await api(`api/measurements?raw=${$("raw").checked}`);
   const host = $("measurements");
   host.innerHTML = "";
   if (!payload.rows.length) return;
@@ -434,8 +434,10 @@ function describeEvent(event) {
 }
 
 function openSocket() {
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${scheme}://${location.host}/ws`);
+  // Relative to <base>, so the socket follows the app under a URL prefix.
+  const url = new URL("ws", document.baseURI);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(url);
   socket.addEventListener("message", (message) => {
     const event = JSON.parse(message.data);
     if (event.type === "status") {
@@ -457,14 +459,14 @@ function openSocket() {
 
 function wire() {
   $("connect").addEventListener("click", async () => {
-    applyStatus(await post("/api/connect"));
+    applyStatus(await post("api/connect"));
   });
   $("disconnect").addEventListener("click", async () => {
-    applyStatus(await post("/api/disconnect"));
+    applyStatus(await post("api/disconnect"));
   });
-  $("abort").addEventListener("click", () => post("/api/abort"));
+  $("abort").addEventListener("click", () => post("api/abort"));
   $("capture").addEventListener("click", async () => {
-    const payload = await post("/api/capture", {
+    const payload = await post("api/capture", {
       direct_trigger: $("direct").checked ? true : null,
     });
     adoptShot(payload);
@@ -473,7 +475,7 @@ function wire() {
   });
 
   $("autofit").addEventListener("click", async () => {
-    const payload = await post("/api/shot/autofit");
+    const payload = await post("api/shot/autofit");
     adoptShot(payload);
     const fitted = Object.entries(payload.shot.fitted_offsets || {});
     $("autofit-note").textContent = fitted.length
@@ -504,13 +506,13 @@ function wire() {
   $("shot-save").addEventListener("click", async () => {
     const path = $("shot-path").value.trim();
     if (!path) return;
-    const payload = await post("/api/shot/save", { path });
+    const payload = await post("api/shot/save", { path });
     appendLog(`saved ${payload.path}`);
   });
   $("shot-load").addEventListener("click", async () => {
     const path = $("shot-path").value.trim();
     if (!path) return;
-    adoptShot(await post("/api/shot/load", { path }));
+    adoptShot(await post("api/shot/load", { path }));
     await refreshFigures();
     await refreshMeasurements();
   });
@@ -519,12 +521,12 @@ function wire() {
     $(id).addEventListener("click", () => {
       // A plain navigation, so the browser handles the download itself.
       const raw = $("raw").checked;
-      window.location.href = `/api/export?format=${format}&raw=${raw}`;
+      window.location.href = `api/export?format=${format}&raw=${raw}`;
     });
   }
 
   $("log-clear").addEventListener("click", async () => {
-    await api("/api/log", { method: "DELETE" });
+    await api("api/log", { method: "DELETE" });
     $("log").textContent = "";
   });
 }
@@ -534,14 +536,14 @@ async function start() {
   updatePairControls();
   openSocket();
 
-  const processing = await api("/api/processing");
+  const processing = await api("api/processing");
   state.catalog = processing.catalog;
   state.pipeline = processing.steps;
   renderCatalog();
   renderPipeline();
 
-  applyStatus(await api("/api/status"));
-  const shot = await api("/api/shot");
+  applyStatus(await api("api/status"));
+  const shot = await api("api/shot");
   if (shot.shot) {
     adoptShot(shot);
     await refreshFigures();
