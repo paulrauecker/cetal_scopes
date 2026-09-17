@@ -237,6 +237,23 @@ pipeline travels with the shot, which is what makes it reproducible: the
 recorded samples plus the exact steps applied to them. **Load** restores all of
 it.
 
+## Bench probes
+
+Three scripts alongside the app that ask an instrument what it actually does.
+They arm nothing and restore what they change, including after `Ctrl-C`:
+
+```bash
+uv run apps/capture_studio/probe_memory_depth.py --address 192.168.5.171   # which depths exist
+uv run apps/capture_studio/probe_write_path.py  --address 192.168.5.171   # why a write has no effect
+uv run apps/capture_studio/probe_timebase_map.py --address 192.168.5.171  # window -> rate the scope picks
+```
+
+The SDS6204L results are why `record_length = "500us"` is in `bench.toml`:
+memory depth is not settable on that instrument at all, the scope stays in
+`AUTO` and maximises the rate, and 500 us is the shortest window it samples
+rather than interpolates. Full method and measured tables in
+[docs/bench-probes.md](../../docs/bench-probes.md).
+
 ## Options
 
 ```

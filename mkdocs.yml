@@ -18,6 +18,7 @@ nav:
   - Getting Started: getting-started.md
   - Architecture: architecture.md
   - Format Spec: format-spec.md
+  - Bench Probes: bench-probes.md
   - Oscilloscopes:
       - Spectrum M5i.3367-x16:
           - Overview: scopes/M5i.3367-x16/index.md

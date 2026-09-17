@@ -17,6 +17,12 @@ a vendored Plotly.js, so there is no node toolchain and nothing is fetched at
 runtime. Full usage, the inventory format, and the panel reference are in
 [`apps/capture_studio/README.md`](https://github.com/paulrauecker/cetal_scopes/tree/main/apps/capture_studio).
 
+## Bench probes
+
+Three scripts ship alongside the app for finding out what an instrument
+actually does with the settings it is given — see
+[Bench probes](../bench-probes.md) for the method and the measured results.
+
 ## What it is for
 
 A shot watched by several instruments at once. The library pieces it builds on:
