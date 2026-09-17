@@ -270,10 +270,37 @@ The Siglent's four channels each have their own converter, so its ceiling
 stays 5 GS/s however many are on. A driver that does not know its own ceiling
 (the demo scope) leaves the key absent and the instrument keeps what it had.
 
-Note what a *fixed* `record_length` does when the rate rises: the window
-halves. And leaving `record_length` blank asks for the deepest record the
-instrument has -- 1 Gpt on the Siglent, which is gigabytes over the socket.
-The ceiling is rarely the value you want for that one.
+`record_length` works the other way round, because it buys no resolution once
+the rate is at its ceiling -- it only sets how much time the shot covers, and
+every extra sample costs transfer time on every shot. Blank therefore means
+the *shortest* record the instrument takes, not the deepest.
+
+### A record length written as a time
+
+When rate is what matters, say how much *time* you want and let the sample
+count follow the resolved rate. A time suffix on `record_length` does that --
+a bare number is still a literal sample count:
+
+```toml
+record_length = "50us"     # a window: 250000 pts at 5 GS/s, 500000 at 10
+record_length = 250000     # exactly this many samples, whatever the rate
+```
+
+`50us`, `50 us`, `50µs`, `1.5ms`, `200ns`, `2e-6 s` all read; so does the
+explicit `window = 50e-6` if you prefer the separate key (giving both is an
+error).
+
+The sample count is `window x sample_rate`, computed after the rate is
+resolved, so raising the rate buys **more samples over the same window**
+rather than a shorter window:
+
+```
+m5i, channels = ["CH0", "CH1"]   ->  5 GS/s x 250000 pts = 50 us
+m5i, channels = ["CH0"]          -> 10 GS/s x 500000 pts = 50 us
+```
+
+`window` is resolved here and never reaches the driver (`configure()` would
+reject it), and giving both `window` and `record_length` is an error.
 
 ## What a shot reports
 

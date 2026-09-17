@@ -14,6 +14,7 @@ from config import (
     demo_inventory,
     dumps_toml,
     load_inventory,
+    parse_duration,
     parse_inventory,
     save_inventory,
 )
@@ -222,9 +223,42 @@ def test_dropping_a_channel_raises_the_m5i_ceiling() -> None:
     assert one["sample_rate"] == 10e9
 
 
-def test_an_absent_record_length_resolves_to_the_deepest_step() -> None:
+def test_an_absent_record_length_resolves_to_the_shortest_record() -> None:
+    """Not the deepest: 1 Gpt is a 200 ms window and gigabytes of transfer."""
     resolved = instrument("siglent_sds6204l", ["C1"]).resolved_settings()
-    assert resolved["record_length"] == 1_000_000_000
+    assert resolved["record_length"] == 10_000
+
+
+def test_a_window_becomes_a_record_length_at_the_resolved_rate() -> None:
+    resolved = instrument("siglent_sds6204l", ["C1"], window=50e-6).resolved_settings()
+    assert resolved["sample_rate"] == 5e9
+    assert resolved["record_length"] == 250_000
+
+
+def test_a_window_holds_while_a_dropped_channel_buys_samples() -> None:
+    """The point of a window: a faster rate fills it more finely."""
+    two = instrument("spectrum_m5i3367", ["CH0", "CH1"], window=50e-6)
+    one = instrument("spectrum_m5i3367", ["CH0"], window=50e-6)
+    assert two.resolved_settings()["record_length"] == 250_000
+    assert one.resolved_settings()["record_length"] == 500_000
+
+
+def test_window_is_not_passed_on_to_the_driver() -> None:
+    """It is our vocabulary, not the driver's; configure() would reject it."""
+    resolved = instrument("siglent_sds6204l", ["C1"], window=1e-6).resolved_settings()
+    assert "window" not in resolved
+
+
+def test_window_and_record_length_together_are_refused() -> None:
+    config = instrument("siglent_sds6204l", ["C1"], window=1e-6, record_length=100)
+    with pytest.raises(ValueError, match="not both"):
+        config.resolved_settings()
+
+
+def test_a_window_needs_a_rate_the_driver_can_report() -> None:
+    config = instrument("demo", ["CH1"], window=1e-6)
+    with pytest.raises(ValueError, match="cannot report its own ceiling"):
+        config.resolved_settings()
 
 
 def test_a_driver_that_knows_no_ceiling_leaves_the_keys_absent() -> None:
@@ -256,3 +290,56 @@ def test_pretrigger_is_fine_when_the_driver_fills_the_window_in() -> None:
         settings={"pretrigger": 0.5},
     )
     assert config.resolved_settings()["sample_rate"] == 5e9
+
+
+# --- a record length written as a duration ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [
+        ("50us", 50e-6),
+        ("50 us", 50e-6),
+        ("50µs", 50e-6),
+        ("50μs", 50e-6),
+        ("1.5ms", 1.5e-3),
+        ("200ns", 200e-9),
+        ("2e-6 s", 2e-6),
+        ("1S", 1.0),
+    ],
+)
+def test_parse_duration_reads_the_usual_spellings(text: str, seconds: float) -> None:
+    assert parse_duration(text) == pytest.approx(seconds)
+
+
+@pytest.mark.parametrize("text", ["50 furlongs", "fifty us", "us", "", "50"])
+def test_parse_duration_refuses_what_it_cannot_read(text: str) -> None:
+    with pytest.raises(ValueError, match="as a duration"):
+        parse_duration(text)
+
+
+def test_a_suffixed_record_length_becomes_a_window() -> None:
+    resolved = instrument(
+        "siglent_sds6204l", ["C1"], record_length="50us"
+    ).resolved_settings()
+    assert resolved["record_length"] == 250_000
+
+
+def test_a_bare_record_length_is_still_a_sample_count() -> None:
+    resolved = instrument(
+        "siglent_sds6204l", ["C1"], record_length=250_000
+    ).resolved_settings()
+    assert resolved["record_length"] == 250_000
+
+
+def test_a_suffixed_record_length_holds_the_window_across_a_rate_change() -> None:
+    two = instrument("spectrum_m5i3367", ["CH0", "CH1"], record_length="50us")
+    one = instrument("spectrum_m5i3367", ["CH0"], record_length="50us")
+    assert two.resolved_settings()["record_length"] == 250_000
+    assert one.resolved_settings()["record_length"] == 500_000
+
+
+def test_a_negative_duration_is_refused() -> None:
+    config = instrument("siglent_sds6204l", ["C1"], record_length="-3us")
+    with pytest.raises(ValueError, match="must be positive"):
+        config.resolved_settings()

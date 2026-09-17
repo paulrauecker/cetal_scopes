@@ -810,13 +810,14 @@ class SiglentSDS6204L(Scope):
         return MAX_RATE_HZ
 
     @classmethod
-    def max_record_length(cls, n_channels: int) -> int | None:
-        """The deepest step of :data:`MDEPTH_ENUM`.
+    def min_record_length(cls, n_channels: int) -> int | None:
+        """The shallowest step of :data:`MDEPTH_ENUM`.
 
-        Note this is 1 Gpt: a full-depth fetch is gigabytes over the socket
-        and takes minutes. It is the ceiling, not a sensible default.
+        10 kpt, which at the 5 GS/s ceiling is a 2 us window -- and lands on
+        a depth step exactly, so the rate comes out as asked rather than
+        being inflated by a rounded-up depth.
         """
-        return MDEPTH_ENUM[-1][0]
+        return MDEPTH_ENUM[0][0]
 
     def connect(self) -> None:
         """Open the socket and identify the instrument."""
