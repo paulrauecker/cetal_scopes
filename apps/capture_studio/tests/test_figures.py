@@ -483,3 +483,49 @@ def test_the_revision_follows_the_shot_so_a_zoom_survives_a_redraw() -> None:
     assert time_figure(shot, revision="shot-1")["layout"]["uirevision"] == "shot-1"
     # Without one, redraws share the panel-wide revision.
     assert time_figure(shot)["layout"]["uirevision"] == "studio"
+
+
+# --- every figure declares its own height ----------------------------------
+#
+# The "Two-channel" panel draws coherence, transfer, XY, spectrogram and the
+# field vector into one container, and the empty state replaces any figure in
+# any container. Plotly.react merges layouts, so a figure that omits `height`
+# after one that set it keeps the old value and renders taller than its panel,
+# which clips it.
+
+
+def pair_figures() -> dict[str, dict[str, Any]]:
+    shot = make_shot()
+    keys = ("siglent:C1", "siglent:C2")
+    return {
+        "coherence": coherence_figure(shot, *keys),
+        "transfer": transfer_figure(shot, *keys),
+        "xy": xy_figure(shot, *keys),
+        "spectrogram": spectrogram_figure(shot, keys[0]),
+        "vector": vector_figure(
+            make_triad_shot((1.0, 0.5, 0.25)),
+            ["probe:X", "probe:Y", "probe:Z"],
+            5e7,
+        ),
+        "empty": empty_figure("nothing to draw"),
+    }
+
+
+@pytest.mark.parametrize("name", list(pair_figures()))
+def test_every_shared_panel_figure_sets_a_height(name: str) -> None:
+    height = pair_figures()[name]["layout"].get("height")
+    assert isinstance(height, int) and height > 0
+
+
+def test_the_single_channel_figures_set_a_height_too() -> None:
+    shot = make_shot()
+    assert time_figure(shot)["layout"]["height"] > 0
+    assert fft_figure(shot)["layout"]["height"] > 0
+
+
+def test_a_stacked_figure_is_taller_than_a_single_one() -> None:
+    """Three rows must not be three slivers of a one-row panel's height."""
+    shot = make_shot()
+    one = time_figure(shot, layout="overlay")["layout"]["height"]
+    stacked = time_figure(shot, layout="per-channel")["layout"]["height"]
+    assert stacked > one

@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cetal_scopes.acquisition import InstrumentSpec
-from cetal_scopes.scopes.registry import DRIVERS, create_scope
+from cetal_scopes.scopes.registry import DRIVERS, create_scope, driver_class
 from cetal_scopes.scopes.siglent import VDIV_LADDER
 
 __all__ = [
@@ -112,6 +112,40 @@ class InstrumentConfig(_Model):
             raise ValueError(f"timeout must be positive, got {value!r}")
         return value
 
+    def resolved_settings(self) -> dict[str, Any]:
+        """The settings as the driver will see them, ceilings filled in.
+
+        In an inventory -- unlike a bare ``configure()`` call, where an absent
+        key means "leave this alone" -- the file is a complete description of
+        what the bench should be doing. So an absent ``sample_rate`` or
+        ``record_length`` means "as high as this instrument goes", answered by
+        the driver itself (:meth:`~cetal_scopes.scopes.base.Scope.max_sample_rate`)
+        rather than by a table duplicated here. A driver that does not know
+        its own ceiling leaves the key absent, and the instrument keeps
+        whatever it was already set to.
+
+        The ceiling depends on the channel count, so dropping a channel from
+        an interleaved digitiser raises the rate on the next connect with no
+        other edit -- which is the point.
+        """
+        settings = dict(self.settings)
+        if self.channels:
+            # Keep configure() consistent with the constructor: a driver that
+            # takes channels both ways must not be told two different things.
+            settings.setdefault("channels", list(self.channels))
+
+        driver = driver_class(self.driver)
+        n_channels = len(self.channels)
+        if "sample_rate" not in settings:
+            ceiling = driver.max_sample_rate(n_channels)
+            if ceiling is not None:
+                settings["sample_rate"] = ceiling
+        if "record_length" not in settings:
+            deepest = driver.max_record_length(n_channels)
+            if deepest is not None:
+                settings["record_length"] = deepest
+        return settings
+
     def build(self) -> InstrumentSpec:
         """Instantiate the driver and wrap it in an :class:`InstrumentSpec`."""
         kwargs: dict[str, Any] = dict(self.options)
@@ -120,11 +154,7 @@ class InstrumentConfig(_Model):
         if self.address is not None:
             kwargs[_address_keyword(self.driver)] = self.address
 
-        settings = dict(self.settings)
-        if self.channels:
-            # Keep configure() consistent with the constructor: a driver that
-            # takes channels both ways must not be told two different things.
-            settings.setdefault("channels", list(self.channels))
+        settings = self.resolved_settings()
 
         return InstrumentSpec(
             label=self.label,

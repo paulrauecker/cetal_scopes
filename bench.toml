@@ -19,17 +19,19 @@ timeout = 5.0              # socket timeout for SCPI commands
 acquire_timeout = 10.0
 
 [instrument.settings]
-sample_rate = 2.0e9        # the front end is trusted to 2 GHz, not to Nyquist
-record_length = 100000     # 50 us at 2 GS/s
+# sample_rate omitted on purpose: an absent rate means "as fast as this
+# instrument goes", which the driver answers (5 GS/s per channel here, and it
+# does not drop when more channels are on -- each has its own converter).
+record_length = 1000000    # an exact MDEPTH step; 200 us at 5 GS/s
 pretrigger = 0.5
-range = 1.0                # volts full-scale
+range = 0.01               # weak signals: snaps to 5 mV/div, so +/-20 mV
 offset = 0.0
 coupling = "DC"
 impedance = 50.0
 
 [instrument.settings.trigger]
 source = "C1"              # or "EX" / "EX5" for the external input
-level = 0.2                # clamps to about +/-4.5 * V/div of the source
+level = 0.001              # clamps to about +/-4.5 * V/div of the source
 slope = "RISing"
 
 # --- Spectrum M5i.3367 over PCIe -------------------------------------------
@@ -45,17 +47,20 @@ timeout = 10.0
 acquire_timeout = 10.0
 
 [instrument.settings]
-sample_rate = 5.0e9        # ceiling with both channels on (10 GS/s with one)
-record_length = 262144     # must be a multiple of 32; 52 us at 5 GS/s
+# sample_rate omitted on purpose: an absent rate means "as fast as this
+# instrument goes". This card interleaves, so the ceiling follows the channel
+# list above -- 5 GS/s with both, 10 GS/s the moment one is removed, with no
+# other edit. A fixed record_length then halves the window when that happens.
+record_length = 1000000    # multiple of 32; 200 us at 5 GS/s, same as the siglent
 pretrigger = 0.5
-range = 1.0                # snaps up to 0.2 / 0.5 / 1.0 / 2.5 V full-scale
+range = 0.2                # the card's most sensitive step; 0.2/0.5/1.0/2.5 V
 offset = 0.0
 
 [instrument.settings.trigger]
 source = "EXT"             # the card's Ext0 "Trig In"; or "CH0" / "CH1"
 # Volts at the connector, within +/-5 V -- but ONLY while the source is EXT.
-# A channel source refers the level to that channel's `range` above (+/-1.0 V
+# A channel source refers the level to that channel's `range` above (+/-0.2 V
 # here), so switching to "CH0"/"CH1" without lowering this is a trigger that
 # can never fire; connecting then refuses it.
-level = 1.5
+level = 0.0015
 slope = "RISing"

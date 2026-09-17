@@ -431,6 +431,29 @@ def test_sample_rate_reads_back_what_the_scope_will_actually_use() -> None:
     assert scope.sample_rate() == pytest.approx(5e9)
 
 
+def test_capture_metadata_records_the_trigger_the_scope_settled_on() -> None:
+    """The level is silently clamped, so record request and readback both."""
+    scope, fake = make_driver()
+    fake.trigger_level = "4.50E-02"
+    scope.connect()
+    scope.configure({"trigger": {"source": "C1", "level": 0.5, "slope": "RISing"}})
+    capture = scope.acquire()
+
+    assert capture.metadata["trigger_source"] == "C1"
+    assert capture.metadata["trigger_slope"] == "RISing"
+    assert capture.metadata["trigger_level_requested_v"] == pytest.approx(0.5)
+    assert capture.metadata["trigger_level_v"] == pytest.approx(0.045)
+
+
+def test_capture_metadata_records_no_trigger_level_before_one_is_set() -> None:
+    scope, _ = make_driver()
+    scope.connect()
+    capture = scope.acquire()
+
+    assert capture.metadata["trigger_source"] is None
+    assert capture.metadata["trigger_level_v"] is None
+
+
 def test_configure_rejects_unknown_key() -> None:
     scope, _ = make_driver()
     scope.connect()

@@ -84,6 +84,28 @@ def _colour(index: int) -> str:
     return PALETTE[index % len(PALETTE)]
 
 
+#: Height, in CSS pixels, of a figure that is a single set of axes.
+#: Every figure declares its own height because several of them share one
+#: container: the "Two-channel" panel draws coherence, transfer, XY,
+#: spectrogram and the field vector into the same div. ``Plotly.react`` merges
+#: layouts, so a figure that omits ``height`` after one that set it inherits
+#: the old value and renders taller than the panel, which clips it
+#: (``.panel`` is ``overflow: hidden`` for its rounded corners).
+PLOT_HEIGHT = 380
+
+#: Height of one row of a stacked subplot grid, before the shared chrome.
+ROW_HEIGHT = 190
+
+
+def stacked_height(n_rows: int) -> int:
+    """Height for a figure of ``n_rows`` stacked subplots.
+
+    Linear in the row count so a three-row figure is not three cramped
+    slivers, with a floor so a one-row figure still gets a usable panel.
+    """
+    return max(PLOT_HEIGHT, ROW_HEIGHT * max(n_rows, 1) + 40)
+
+
 def _base_layout(title: str, **overrides: Any) -> dict[str, Any]:
     """A layout that leaves room for whatever it is given.
 
@@ -144,6 +166,9 @@ def empty_figure(message: str) -> dict[str, Any]:
                     "font": {"size": 14},
                 }
             ],
+            # Declared for the same reason every other figure declares it:
+            # the empty state replaces a real figure in the same container.
+            height=PLOT_HEIGHT,
         ),
     }
 
@@ -314,7 +339,7 @@ def time_figure(
             # land on the next row's traces.
             "ygap": 0.28,
         }
-        figure_layout["height"] = max(300, 190 * n_rows) + 40
+    figure_layout["height"] = stacked_height(n_rows)
 
     if revision is not None:
         figure_layout["uirevision"] = revision
@@ -585,6 +610,7 @@ def fft_figure(
                 "type": "log" if (log_y and not db) else "linear",
             },
             annotations=annotations,
+            height=PLOT_HEIGHT,
         ),
     }
 
@@ -678,6 +704,7 @@ def spectrogram_figure(
             showlegend=False,
             xaxis={"title": {"text": f"time ({unit})"}},
             yaxis={"title": {"text": "frequency (Hz)"}},
+            height=PLOT_HEIGHT,
         ),
     }
 
@@ -727,6 +754,7 @@ def coherence_figure(
             showlegend=False,
             xaxis={"title": {"text": "frequency (Hz)"}, "type": "log"},
             yaxis={"title": {"text": "coherence"}, "range": [0, 1.05]},
+            height=PLOT_HEIGHT,
         ),
     }
 
@@ -777,7 +805,7 @@ def transfer_figure(
         "layout": _base_layout(
             f"transfer: {a} -> {b}",
             grid={"rows": 3, "columns": 1, "pattern": "independent"},
-            height=520,
+            height=stacked_height(3),
             xaxis={"title": {"text": "frequency (Hz)"}, "type": "log"},
             yaxis={"title": {"text": "|H|"}, "type": "log"},
             yaxis2={"title": {"text": "phase (deg)"}, "matches": None},
@@ -835,6 +863,9 @@ def xy_figure(
                 "scaleanchor": "x",
                 "scaleratio": 1,
             },
+            # Equal-aspect axes: without a fixed height Plotly satisfies the
+            # ratio by growing the plot rather than by narrowing the x range.
+            height=PLOT_HEIGHT,
         ),
     }
 
@@ -970,6 +1001,6 @@ def vector_figure(
                 "zaxis": {"title": {"text": channel_names[2]}},
                 "aspectmode": "data",
             },
-            height=460,
+            height=PLOT_HEIGHT + 80,
         ),
     }
