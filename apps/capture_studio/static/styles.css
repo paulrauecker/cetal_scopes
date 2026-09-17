@@ -143,3 +143,55 @@ td.state-bad { color: var(--bad); }
 .channel-list label { white-space: nowrap; }
 .channel-list .capture-name { color: var(--muted); font-size: 12px; margin-left: 4px; }
 .channel-list .capture-name:first-child { margin-left: 0; }
+
+/* The panel that is the whole grid's width: the trace panel and the
+   instrument editor, both of which need the room. */
+.panel:first-of-type,
+.panel.wide { grid-column: 1 / -1; }
+
+.inv-run {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.inv-run input { width: 6em; }
+
+.inventory { padding: 8px 12px; display: grid; gap: 10px; }
+
+.instrument {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  display: grid;
+  gap: 6px;
+}
+/* A disabled instrument stays visible and editable, just clearly out of
+   the run -- which is the point of the 'enabled' flag. */
+.instrument.off { opacity: 0.55; }
+
+.instrument-head,
+.instrument-body,
+.instrument-extras {
+  display: flex;
+  gap: 6px 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.instrument-head { border-bottom: 1px dashed var(--line); padding-bottom: 6px; }
+.instrument-extras { align-items: flex-start; }
+
+.instrument textarea {
+  font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  width: 24em;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+}
+.instrument textarea.bad-input { border-color: var(--bad); }

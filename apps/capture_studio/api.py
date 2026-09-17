@@ -291,6 +291,10 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
             )
         if layout not in LAYOUTS:
             raise HTTPException(400, f"unknown layout {layout!r}")
+        # A drawing budget, not an analysis parameter: nothing on a screen
+        # shows more than a few thousand points per trace, and an unbounded
+        # value here is a multi-megabyte response the browser cannot draw.
+        max_points = int(min(max(max_points, 200), 20000))
 
         shot = session.shot
         # An explicit empty ``channels=`` means none, not all: it is what the
@@ -436,6 +440,7 @@ def _build_figure(
             psd=psd,
             log_x=log_x,
             log_y=log_y,
+            max_points=max_points,
         )
     if panel == "spectrogram":
         if a is None:
@@ -455,8 +460,8 @@ def _build_figure(
     if panel == "xy":
         return xy_figure(shot, a, b, processed=processed)
     if panel == "coherence":
-        return coherence_figure(shot, a, b, processed=processed)
-    return transfer_figure(shot, a, b, processed=processed)
+        return coherence_figure(shot, a, b, processed=processed, max_points=max_points)
+    return transfer_figure(shot, a, b, processed=processed, max_points=max_points)
 
 
 def _status_payload(session: StudioSession) -> dict[str, Any]:

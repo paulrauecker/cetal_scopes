@@ -8,6 +8,7 @@ from figures import (
     LAYOUTS,
     LayoutMode,
     coherence_figure,
+    decimate_spectrum,
     empty_figure,
     fft_figure,
     measurement_table,
@@ -269,3 +270,62 @@ def test_the_vector_panel_refuses_channels_from_different_captures() -> None:
     shot = make_shot()
     with pytest.raises(ValueError, match="must come from one capture"):
         vector_figure(shot, ["siglent:C1", "siglent:C2", "m5i:CH0"], 1e8)
+
+
+def test_spectra_are_decimated_to_the_budget() -> None:
+    # A full-rate spectrum is half the record per channel, which is a
+    # multi-megabyte response the browser cannot draw. The figure is binned
+    # instead; the analysis behind it is not.
+    figure = fft_figure(make_shot(), max_points=200)
+    assert all(len(trace["x"]) <= 200 for trace in figure["data"])
+    assert all(len(trace["x"]) == len(trace["y"]) for trace in figure["data"])
+
+
+def test_decimation_keeps_the_peak() -> None:
+    freq = np.linspace(1.0, 1e8, 50_000)
+    values = np.full(freq.shape, 0.01)
+    values[31_415] = 7.0
+
+    for log_x in (False, True):
+        drawn_freq, drawn_values = decimate_spectrum(freq, values, 400, log_x=log_x)
+        assert drawn_freq.size <= 400
+        assert drawn_values.max() == pytest.approx(7.0)
+        peak = drawn_freq[int(np.argmax(drawn_values))]
+        assert peak == pytest.approx(freq[31_415])
+
+
+def test_decimation_leaves_a_short_spectrum_alone() -> None:
+    freq = np.linspace(1.0, 10.0, 50)
+    values = np.arange(50, dtype=np.float64)
+    drawn_freq, drawn_values = decimate_spectrum(freq, values, 4000)
+    assert drawn_freq is freq or np.array_equal(drawn_freq, freq)
+    assert np.array_equal(drawn_values, values)
+
+
+def test_the_peak_annotation_is_measured_before_decimation() -> None:
+    # The label must report the real peak frequency, not a binned one.
+    full = fft_figure(make_shot(), max_points=1_000_000)["layout"]["annotations"]
+    binned = fft_figure(make_shot(), max_points=100)["layout"]["annotations"]
+    assert [item["text"] for item in binned] == [item["text"] for item in full]
+
+
+def test_peak_labels_do_not_stack_on_one_another() -> None:
+    offsets = [item["ay"] for item in fft_figure(make_shot())["layout"]["annotations"]]
+    assert len(set(offsets)) == len(offsets)
+
+
+def test_a_spectrogram_caps_its_frequency_bins() -> None:
+    figure = spectrogram_figure(make_shot(), "siglent:C1", max_freq_bins=32)
+    assert len(figure["data"][0]["y"]) <= 32
+    assert all(len(row) <= 32 for row in figure["data"][0]["z"])
+
+
+def test_stacked_rows_label_only_the_bottom_axis() -> None:
+    # A time title on every row lands on the row beneath it.
+    layout = time_figure(make_shot(), layout="per-channel")["layout"]
+    titled = [
+        key
+        for key, value in layout.items()
+        if key.startswith("xaxis") and isinstance(value, dict) and "title" in value
+    ]
+    assert len(titled) == 1

@@ -42,8 +42,20 @@ There is no authentication in the app -- put it behind one.
 ## The inventory
 
 A run is defined by a TOML file rather than by whatever was typed into a form,
-so a bench setup is reproducible and reviewable. The UI edits the same
-structure and **Save** writes it back.
+so a bench setup is reproducible and reviewable. The **Instruments** panel
+edits that same structure: sample rate, record length, pretrigger, range,
+offset, coupling, impedance and the trigger get their own fields, and anything
+else the driver accepts -- panel-native keys like Siglent's `timebase`, or the
+per-channel mapping form of `range` -- stays in the JSON boxes beside them,
+rather than being flattened into a single number it is not.
+
+- **Apply** hands the setup to the session. It disconnects the instruments,
+  since which instruments exist may have changed; the next **Capture shot**
+  reconnects and reconfigures them.
+- **Save to file** writes it back to the inventory TOML, so what was tuned in
+  the browser survives the session.
+- **Demo** fills the editor with synthetic instruments, and **Reload** throws
+  away edits and re-reads what the session holds. Neither applies anything.
 
 ```toml
 poll_interval = 0.2       # how finely the trigger wait is sliced (abort latency)
@@ -114,6 +126,15 @@ silently from the wrong event.
 
 Each capture has its own clock, so they need putting on a common axis.
 
+Sample rates do not have to match, and captures are never resampled onto each
+other to be drawn. Each channel carries its own `t0` and `dt`, a capture's
+offset shifts its `t0`, and every time-domain figure is drawn on that absolute
+axis -- so two instruments digitizing one event put it at one time on the plot,
+to within a sample of the coarser of the two. Auto-fit measures the lag on the
+finer of the two sample intervals and adds back the difference in recorded
+origins, which is the pretrigger mismatch between two instruments set up
+differently.
+
 - **Manual**: type a per-capture offset in nanoseconds. Traces move live.
 - **Auto-fit**: cross-correlates every capture against the reference. The fit
   is inspectable rather than magic — each result shows its correlation and
@@ -122,6 +143,8 @@ Each capture has its own clock, so they need putting on a common axis.
 
 ## Panels
 
+- **Instruments** — the inventory editor described above: what each instrument
+  is told before a shot.
 - **Traces** — three layouts: everything overlaid, one row per capture, or one
   row per channel. Stacked rows share the x-axis, so zoom moves them together.
   Long records are drawn through a min/max envelope, so a one-sample spike
@@ -131,6 +154,8 @@ Each capture has its own clock, so they need putting on a common axis.
   the whole shot. Channels of a later shot arrive visible.
 - **Spectrum** — FFT per channel, amplitude or PSD, log or linear, selectable
   window, peak annotated. Follows the Traces panel's channel toggles.
+  **Detail** sets the points drawn per trace (see *Drawing cost* below); the
+  annotated peak is measured on the full spectrum, before any binning.
 - **Two-channel** — coherence, transfer function (gain, phase, and the
   coherence beneath them, because a transfer function has a value at every
   frequency whether or not the channels are related there), XY, a spectrogram,
@@ -182,6 +207,14 @@ it.
 
 ## Notes
 
+- **Drawing cost.** A figure is binned to a drawing budget before it is sent:
+  time traces through a min/max envelope, spectra through the same envelope on
+  geometric bins when the axis is logarithmic, so a narrow spur keeps its full
+  height and the noise floor keeps its width. Nothing on a 1000-pixel axis can
+  show more, and the alternative is real: a full-rate spectrum is half the
+  record *per channel*, which on a bench-sized shot was an 18 MB response the
+  browser then had to parse and lay out. Every measurement, fit and export
+  still runs on the whole record.
 - One session owns the hardware for the whole process, behind a single lock, so
   two browser tabs cannot arm the same scopes at once.
 - Abort takes effect at the next wait slice (`poll_interval`) plus any driver

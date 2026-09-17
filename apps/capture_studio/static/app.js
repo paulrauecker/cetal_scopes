@@ -10,6 +10,9 @@ const state = {
   status: {},
   catalog: [],
   pipeline: [],
+  inventory: null,
+  drivers: [],
+  configPath: null,
 };
 
 async function api(path, options) {
@@ -104,7 +107,7 @@ function renderChannelToggles() {
       box.addEventListener("change", () => {
         if (box.checked) state.hidden.delete(key);
         else state.hidden.add(key);
-        refreshFigures();
+        scheduleRefresh();
       });
 
       const label = document.createElement("label");
@@ -119,7 +122,7 @@ function setAllChannels(visible) {
   if (visible) state.hidden.clear();
   else for (const key of channelKeys()) state.hidden.add(key);
   renderChannelToggles();
-  refreshFigures();
+  scheduleRefresh();
 }
 
 function updatePairControls() {
@@ -320,51 +323,96 @@ async function savePipeline() {
 
 const PLOT_CONFIG = { responsive: true, displaylogo: false };
 
-async function drawFigure(target, query) {
-  const payload = await api(`api/figure?${new URLSearchParams(query)}`);
-  const figure = payload.figure;
-  Plotly.react(target, figure.data, figure.layout, PLOT_CONFIG);
-  return payload.warnings || [];
+// Every figure request carries the generation it was issued in. A slower
+// panel answering after the user has moved on used to repaint the plot with
+// a stale figure, which looked exactly like "the plot did not update".
+let generation = 0;
+let inFlight = 0;
+let refreshTimer = null;
+
+function setDrawing(active) {
+  inFlight += active ? 1 : -1;
+  $("drawing").hidden = inFlight <= 0;
+}
+
+async function drawFigure(target, query, token) {
+  setDrawing(true);
+  try {
+    const payload = await api(`api/figure?${new URLSearchParams(query)}`);
+    if (token !== generation) return null;
+    const figure = payload.figure;
+    Plotly.react(target, figure.data, figure.layout, PLOT_CONFIG);
+    return payload.warnings || [];
+  } finally {
+    setDrawing(false);
+  }
+}
+
+/** Coalesce the bursts of changes a single interaction produces. */
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshFigures().catch(() => {
+      /* the error is already in the status line */
+    });
+  }, 120);
 }
 
 async function refreshFigures() {
   if (!state.shot) return;
+  const token = ++generation;
   const raw = $("raw").checked ? "true" : "false";
   // Always explicit: an empty value means none, which is what an empty
   // selection should draw.
   const channels = visibleChannels().join(",");
+  const detail = $("detail").value;
 
-  const warnings = await drawFigure("time-plot", {
-    panel: "time",
-    layout: $("layout").value,
-    channels,
-    raw,
-  });
-  $("pipeline-warnings").textContent = warnings.join(" · ");
-
-  await drawFigure("fft-plot", {
-    panel: "fft",
-    channels,
-    psd: $("psd").checked,
-    log_x: $("logx").checked,
-    log_y: $("logy").checked,
-    window: $("window").value,
-    raw,
+  // The three panels are independent requests, so they go out together and
+  // one failing does not stop the others: a two-channel panel that needs a
+  // selection the shot cannot satisfy must not keep the traces and the
+  // spectrum from redrawing.
+  const traces = drawFigure(
+    "time-plot",
+    { panel: "time", layout: $("layout").value, channels, raw, max_points: detail },
+    token,
+  ).then((warnings) => {
+    if (warnings) $("pipeline-warnings").textContent = warnings.join(" · ");
   });
 
-  await refreshPairFigure();
+  const spectrum = drawFigure(
+    "fft-plot",
+    {
+      panel: "fft",
+      channels,
+      psd: $("psd").checked,
+      log_x: $("logx").checked,
+      log_y: $("logy").checked,
+      window: $("window").value,
+      max_points: detail,
+      raw,
+    },
+    token,
+  );
+
+  await Promise.allSettled([traces, spectrum, refreshPairFigure(token)]);
 }
 
-async function refreshPairFigure() {
+async function refreshPairFigure(token) {
   updatePairControls();
   if (!state.shot) return;
+  if (token === undefined) token = ++generation;
   const panel = $("pair-panel").value;
   const a = $("chan-a").value;
   const b = $("chan-b").value;
   const c = $("chan-c").value;
   if (!a) return;
 
-  const query = { panel, raw: $("raw").checked, window: $("window").value };
+  const query = {
+    panel,
+    raw: $("raw").checked,
+    window: $("window").value,
+    max_points: $("detail").value,
+  };
   if (panel === "vector") {
     if (!b || !c) return;
     query.channels = [a, b, c].join(",");
@@ -376,7 +424,7 @@ async function refreshPairFigure() {
   }
 
   try {
-    await drawFigure("pair-plot", query);
+    await drawFigure("pair-plot", query, token);
   } catch {
     /* the error is already in the status line */
   }
@@ -449,6 +497,355 @@ function renderShotMeta() {
 }
 
 // ---------------------------------------------------------------------------
+// Inventory (what the instruments are told before a shot)
+//
+// The inventory is the same structure as the TOML file, so what the UI edits
+// is what a bench setup is made of; "Apply" hands it to the session and
+// "Save to file" writes it back. Only the shared physical vocabulary gets its
+// own field. Panel-native keys and the per-channel mapping form (a dict of
+// channel to value) stay in the JSON box rather than being flattened into a
+// single number they are not.
+
+const SETTING_FIELDS = [
+  ["sample_rate", "number", "Hz"],
+  ["record_length", "number", "samples"],
+  ["pretrigger", "number", "fraction of the record (0-1), or whole samples"],
+  ["range", "number", "V full-scale (the channel spans ±range)"],
+  ["offset", "number", "V"],
+  ["coupling", "text", "DC / AC"],
+  ["impedance", "number", "ohms"],
+];
+
+const TRIGGER_FIELDS = [
+  ["source", "text", "e.g. C1, EXT, EX5"],
+  ["level", "number", "V"],
+  ["slope", "text", "RISing / FALLing"],
+];
+
+function field(label, node, hint) {
+  const wrap = document.createElement("label");
+  wrap.append(label, node);
+  if (hint) wrap.title = hint;
+  return wrap;
+}
+
+function textInput(value, { type = "text", width = "8em", step = "any" } = {}) {
+  const input = document.createElement("input");
+  input.type = type;
+  if (type === "number") input.step = step;
+  input.style.width = width;
+  input.value = value == null ? "" : value;
+  return input;
+}
+
+function readNumber(input) {
+  const raw = input.value.trim();
+  if (raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Settings that get their own field, given what the instrument currently holds. */
+function splitSettings(settings) {
+  const scalar = {};
+  const advanced = {};
+  const known = new Set(SETTING_FIELDS.map(([name]) => name));
+  for (const [key, value] of Object.entries(settings || {})) {
+    if (key === "trigger" && value && typeof value === "object") continue;
+    if (key === "channels") continue; // edited as the instrument's channel list
+    if (known.has(key) && (value === null || typeof value !== "object")) {
+      scalar[key] = value;
+    } else {
+      advanced[key] = value;
+    }
+  }
+  return { scalar, advanced };
+}
+
+function jsonBox(value, rows = 2) {
+  const box = document.createElement("textarea");
+  box.rows = rows;
+  box.spellcheck = false;
+  box.value =
+    value && Object.keys(value).length ? JSON.stringify(value, null, 1) : "";
+  return box;
+}
+
+function readJson(box, what) {
+  const raw = box.value.trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("not an object");
+    }
+    box.classList.remove("bad-input");
+    return parsed;
+  } catch (error) {
+    box.classList.add("bad-input");
+    throw new Error(`${what} is not a JSON object: ${error.message}`);
+  }
+}
+
+function renderInventory() {
+  const host = $("inventory");
+  host.innerHTML = "";
+  const inventory = state.inventory;
+  $("inv-path").textContent = state.configPath
+    ? `file: ${state.configPath}`
+    : "no inventory file; give a path when saving";
+  if (!inventory) return;
+
+  $("inv-poll").value = inventory.poll_interval;
+  $("inv-default-timeout").value = inventory.default_timeout;
+  $("inv-arm-timeout").value = inventory.arm_timeout;
+
+  inventory.instruments.forEach((item, index) => {
+    const card = document.createElement("div");
+    card.className = "instrument";
+    if (!item.enabled) card.classList.add("off");
+
+    const head = document.createElement("div");
+    head.className = "instrument-head";
+
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = item.enabled;
+    enabled.addEventListener("change", () => {
+      item.enabled = enabled.checked;
+      card.classList.toggle("off", !enabled.checked);
+    });
+    head.append(field("on", enabled, "Keep the instrument in the file but out of the run"));
+
+    const label = textInput(item.label, { width: "8em" });
+    label.addEventListener("change", () => {
+      item.label = label.value.trim();
+    });
+    head.append(field("label", label, "Becomes the capture's key in the shot"));
+
+    const driver = document.createElement("select");
+    for (const name of state.drivers) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      driver.append(option);
+    }
+    driver.value = item.driver;
+    driver.addEventListener("change", () => {
+      item.driver = driver.value;
+    });
+    head.append(field("driver", driver));
+
+    const address = textInput(item.address, { width: "11em" });
+    address.addEventListener("change", () => {
+      item.address = address.value.trim() || null;
+    });
+    head.append(field("address", address, "IP for the Siglent, device node for the M5i"));
+
+    const channels = textInput((item.channels || []).join(", "), { width: "11em" });
+    channels.addEventListener("change", () => {
+      item.channels = channels.value
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean);
+    });
+    head.append(field("channels", channels, "Comma separated, e.g. C1, C2"));
+
+    const timeout = textInput(item.timeout, { type: "number", width: "5em" });
+    timeout.addEventListener("change", () => {
+      item.timeout = readNumber(timeout);
+    });
+    head.append(field("timeout", timeout, "Seconds to wait for this instrument's trigger"));
+
+    for (const [name, hint] of [
+      ["direct_trigger", "Force this instrument in software once everything is armed"],
+      ["required", "Whether this instrument failing makes the shot incomplete"],
+    ]) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = item[name];
+      box.addEventListener("change", () => {
+        item[name] = box.checked;
+      });
+      head.append(field(name.replace("_", " "), box, hint));
+    }
+
+    const remove = document.createElement("button");
+    remove.className = "small";
+    remove.textContent = "remove";
+    remove.addEventListener("click", () => {
+      inventory.instruments.splice(index, 1);
+      renderInventory();
+    });
+    head.append(remove);
+    card.append(head);
+
+    const { scalar, advanced } = splitSettings(item.settings);
+    const body = document.createElement("div");
+    body.className = "instrument-body";
+    for (const [name, type, hint] of SETTING_FIELDS) {
+      const input = textInput(scalar[name], {
+        type,
+        width: type === "number" ? "7em" : "5em",
+      });
+      input.addEventListener("change", () => {
+        const value = type === "number" ? readNumber(input) : input.value.trim() || null;
+        if (value === null) delete item.settings[name];
+        else item.settings[name] = value;
+      });
+      body.append(field(name.replace(/_/g, " "), input, hint));
+    }
+
+    const trigger =
+      item.settings.trigger && typeof item.settings.trigger === "object"
+        ? item.settings.trigger
+        : null;
+    for (const [name, type, hint] of TRIGGER_FIELDS) {
+      const input = textInput(trigger ? trigger[name] : null, {
+        type,
+        width: type === "number" ? "6em" : "6em",
+      });
+      input.addEventListener("change", () => {
+        const value = type === "number" ? readNumber(input) : input.value.trim() || null;
+        const current =
+          item.settings.trigger && typeof item.settings.trigger === "object"
+            ? item.settings.trigger
+            : {};
+        if (value === null) delete current[name];
+        else current[name] = value;
+        if (Object.keys(current).length) item.settings.trigger = current;
+        else delete item.settings.trigger;
+      });
+      body.append(field(`trigger ${name}`, input, hint));
+    }
+    card.append(body);
+
+    const extras = document.createElement("div");
+    extras.className = "instrument-extras";
+    const settingsBox = jsonBox(advanced);
+    settingsBox.placeholder = '{"timebase": 5e-6}';
+    settingsBox.dataset.role = "settings";
+    extras.append(
+      field("other settings", settingsBox, "Panel-native configure() keys, as JSON"),
+    );
+    const optionsBox = jsonBox(item.options);
+    optionsBox.placeholder = '{"acquire_timeout": 10.0}';
+    optionsBox.dataset.role = "options";
+    extras.append(
+      field("driver options", optionsBox, "Constructor arguments, as JSON"),
+    );
+    card.append(extras);
+
+    // The JSON boxes are read on Apply rather than on change, so a
+    // half-typed object does not throw while it is being typed.
+    card.dataset.index = String(index);
+    host.append(card);
+  });
+}
+
+function collectInventory() {
+  const inventory = state.inventory;
+  inventory.poll_interval = readNumber($("inv-poll")) ?? inventory.poll_interval;
+  inventory.default_timeout =
+    readNumber($("inv-default-timeout")) ?? inventory.default_timeout;
+  inventory.arm_timeout = readNumber($("inv-arm-timeout")) ?? inventory.arm_timeout;
+
+  for (const card of $("inventory").children) {
+    const item = inventory.instruments[Number(card.dataset.index)];
+    const advanced = readJson(
+      card.querySelector('textarea[data-role="settings"]'),
+      `${item.label}: other settings`,
+    );
+    item.options = readJson(
+      card.querySelector('textarea[data-role="options"]'),
+      `${item.label}: driver options`,
+    );
+    const { scalar } = splitSettings(item.settings);
+    const trigger = item.settings.trigger;
+    item.settings = { ...advanced, ...scalar };
+    if (trigger && Object.keys(trigger).length) item.settings.trigger = trigger;
+  }
+  return inventory;
+}
+
+async function loadInventory() {
+  const payload = await api("api/inventory");
+  state.inventory = payload.inventory;
+  state.drivers = payload.drivers;
+  state.configPath = payload.config_path;
+  renderInventory();
+}
+
+function wireInventory() {
+  $("inv-reload").addEventListener("click", async () => {
+    await loadInventory();
+    $("inv-note").textContent = "reloaded";
+  });
+
+  $("inv-apply").addEventListener("click", async () => {
+    let inventory;
+    try {
+      inventory = collectInventory();
+    } catch (error) {
+      setStatus(`error: ${error.message}`, "bad");
+      return;
+    }
+    const payload = await put("api/inventory", { inventory });
+    state.inventory = payload.inventory;
+    renderInventory();
+    applyStatus(await api("api/status"));
+    $("inv-note").textContent =
+      "applied — instruments disconnected; the next capture reconnects them";
+  });
+
+  $("inv-save").addEventListener("click", async () => {
+    try {
+      collectInventory();
+    } catch (error) {
+      setStatus(`error: ${error.message}`, "bad");
+      return;
+    }
+    const path = state.configPath || $("shot-path").value.trim();
+    if (!path) {
+      $("inv-note").textContent =
+        "no inventory file is configured; start the app with --config, or put a path in the Shot box";
+      return;
+    }
+    // Saving writes what the session holds, so apply first.
+    await put("api/inventory", { inventory: state.inventory });
+    const saved = await post("api/inventory/save", { path });
+    state.configPath = saved.path;
+    $("inv-note").textContent = `saved to ${saved.path}`;
+    renderInventory();
+  });
+
+  $("inv-add").addEventListener("click", () => {
+    if (!state.inventory) return;
+    const n = state.inventory.instruments.length + 1;
+    state.inventory.instruments.push({
+      label: `scope${n}`,
+      driver: state.drivers[0] || "demo",
+      address: null,
+      channels: [],
+      settings: {},
+      timeout: null,
+      direct_trigger: false,
+      required: true,
+      enabled: true,
+      options: {},
+    });
+    renderInventory();
+  });
+
+  $("inv-demo").addEventListener("click", async () => {
+    const payload = await api("api/inventory/demo?instruments=2");
+    state.inventory = payload.inventory;
+    renderInventory();
+    $("inv-note").textContent = "demo setup loaded into the editor — not applied yet";
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Log and events
 
 function appendLog(text) {
@@ -507,6 +904,7 @@ function openSocket() {
 // Wiring
 
 function wire() {
+  wireInventory();
   $("connect").addEventListener("click", async () => {
     applyStatus(await post("api/connect"));
   });
@@ -537,16 +935,15 @@ function wire() {
     await refreshFigures();
   });
 
-  $("refresh").addEventListener("click", refreshFigures);
+  $("refresh").addEventListener("click", scheduleRefresh);
   $("measure").addEventListener("click", refreshMeasurements);
-  for (const id of ["layout", "raw"]) {
-    $(id).addEventListener("change", refreshFigures);
-  }
-  for (const id of ["psd", "logx", "logy", "window"]) {
-    $(id).addEventListener("change", refreshFigures);
+  for (const id of ["layout", "raw", "psd", "logx", "logy", "window", "detail"]) {
+    $(id).addEventListener("change", scheduleRefresh);
   }
   for (const id of ["pair-panel", "chan-a", "chan-b", "chan-c", "vector-f"]) {
-    $(id).addEventListener("change", refreshPairFigure);
+    $(id).addEventListener("change", () => {
+      refreshPairFigure().catch(() => {});
+    });
   }
 
   $("step-add").addEventListener("click", () => {
@@ -586,6 +983,8 @@ async function start() {
   wire();
   updatePairControls();
   openSocket();
+
+  await loadInventory();
 
   const processing = await api("api/processing");
   state.catalog = processing.catalog;
