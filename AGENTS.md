@@ -75,6 +75,13 @@ Read `docs/architecture.md` before changing the data model. In short:
   exist, and force trigger is a *value* of `:TRIGger:MODE` (`FTRIG`). Forcing
   therefore clobbers the configured sweep mode, and the driver re-asserts it on
   the next `arm()`.
+  **`:ACQuire:MDEPth` is rejected on this unit** (every spelling; `*ESR?` bit
+  4) and `:ACQuire:MMANagement` is accepted and ignored, so the scope is
+  permanently in `AUTO` and picks rate and depth itself. `set_acquisition`
+  writes only the timebase. It maximises the rate, so windows up to 200 us
+  come back at the interpolated 10 GS/s; 500 us is the shortest window that
+  falls to the native 5 GS/s. Re-probe with
+  `apps/capture_studio/probe_timebase_map.py` on other firmware.
   Interpolation (`:ACQuire:INTerpolation`, `ON` = sin(x)/x, `OFF` = linear) is
   what Siglent's "enhanced sample rate" (ESR, 10 GSa/s against a native
   5 GSa/s per channel) is made of: reconstructed points, not measured ones.

@@ -298,11 +298,14 @@ def snap_timebase(seconds_per_div: float) -> float:
     return TDIV_ENUM[-1]
 
 
-# Memory-depth enumeration for ``:ACQuire:MDEPth``. NOT independently
-# hardware-verified: the manual excerpt in docs/scopes/SDS6204L/code.md only
-# gives these as *example* values for the command's syntax, not a complete,
-# channel-count-aware table. Confirm the full ladder against a real SDS6204L
-# before relying on exact depth selection for a demanding acquisition.
+# Memory-depth enumeration for ``:ACQuire:MDEPth``.
+#
+# Measured against an SDS6204L (firmware 18.36.11.2.0.3.7) with
+# ``apps/capture_studio/probe_memory_depth.py``: the setter is **rejected in
+# every spelling** and the instrument reports a depth this table does not even
+# contain (2.5M). ``set_acquisition`` therefore does not write depth at all,
+# and this table survives only to describe what *would* be requested. Do not
+# build anything on it without re-probing: on that unit it selects nothing.
 MDEPTH_ENUM: tuple[tuple[int, str], ...] = (
     (10_000, "10k"),
     (1_000_000, "1M"),
@@ -388,11 +391,15 @@ def _impedance_ohms_to_string(ohms: float) -> str:
 class AcquisitionPlan:
     """What :meth:`SiglentSDS6204L.set_acquisition` actually requested.
 
-    ``sample_rate``/``record_length`` are honored via ``timebase`` (s/div)
-    and ``memory_depth``; the scope's own readback (:class:`WaveDesc`, at
-    acquire time) is the source of truth for what was actually achieved --
-    both are rounded to the nearest achievable step, and sample rate in
-    particular is not directly settable on this instrument.
+    Only ``timebase`` is actually written: ``:ACQuire:MDEPth`` is rejected by
+    this instrument (see :data:`MDEPTH_ENUM`), so ``memory_depth`` records
+    what would have been asked for, not a setting that was applied. The scope
+    stays in ``AUTO`` memory management and chooses both the sample rate and
+    the record length from the window -- maximising the rate, which means
+    reaching for the interpolated 10 GS/s "ESR" until the window is long
+    enough that memory forbids it (measured: 500 us, where it settles to the
+    native 5 GS/s). The readback (:class:`WaveDesc`, at acquire time) is the
+    only source of truth for what was achieved.
     """
 
     requested_sample_rate: float | None
@@ -1027,7 +1034,15 @@ class SiglentSDS6204L(Scope):
             window_s = tdiv * self._grid_num
             depth_label = snap_mdepth(round(effective_rate * window_s))
             self.set_timebase(scale=tdiv)
-            self.set_memory_depth(depth_label)
+            # Deliberately not written: measured against an SDS6204L
+            # (firmware 18.36.11.2.0.3.7), ``:ACQuire:MDEPth`` is *rejected*
+            # in every spelling -- ``*ESR?`` bit 4 -- and
+            # ``:ACQuire:MMANagement`` is accepted and ignored, so the
+            # instrument stays in AUTO and picks rate and depth itself.
+            # Issuing it anyway achieved nothing and latched a command error
+            # on every configure(). The timebase is the only knob; the rate
+            # and record length come back in the WaveDesc.
+            # ``depth_label`` is kept in the plan as what *would* be asked.
             self._last_sample_rate = effective_rate
             self._last_record_length = effective_length
             self._last_window_s = window_s

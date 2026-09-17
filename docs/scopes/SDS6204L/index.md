@@ -53,6 +53,34 @@ is not ready — `_fetch_codes` raises rather than returning garbage.
   accepts `0.05`. The write is silently clamped, so read `:TRIGger:EDGE:LEVel?`
   back (or use `SiglentSDS6204L.trigger_level()`) and coarsen `V/div` / add a
   vertical offset to trigger above the noise.
+- **Memory depth is not settable; the timebase is the only acquisition knob.**
+  Measured on this unit (firmware 18.36.11.2.0.3.7) with
+  `apps/capture_studio/probe_*.py`: `:ACQuire:MDEPth` is **rejected** in every
+  spelling (`*ESR?` bit 4) while its *query* works, and
+  `:ACQuire:MMANagement` is accepted and silently ignored. The scope stays in
+  `AUTO`, choosing both rate and depth from the window, and maximising the
+  rate. `MDEPTH_ENUM` selects nothing; `set_acquisition` writes only
+  `:TIMebase:SCALe`, and `WaveDesc` is the only truth for what was achieved.
+- **The window decides whether you get measured or interpolated samples.**
+  Measured timebase map (3 channels):
+
+  | window | rate | points | |
+  |---|---|---|---|
+  | <= 200 us | 10 GS/s | rate x window | interpolated (ESR) |
+  | **500 us** | **5 GS/s** | **2.5 Mpt** | **fully measured** |
+  | 1 ms | 1 GS/s | 1 Mpt | measured |
+  | 10 ms | 0.25 GS/s | 2.5 Mpt | measured |
+
+  500 us is the shortest honest capture. Shorter windows lose no real
+  information -- the ADC runs at 5 GS/s regardless -- but half the returned
+  points are reconstructed.
+- **A stopped scope reports its last acquisition, not the pending setup.**
+  After `:TRIGger:STOP`, `:ACQuire:SRATe?` and `:ACQuire:MDEPth?` keep
+  answering with the previous capture's values however many settings you
+  change. Anything that reads them must free-run first (`:TRIGger:MODE AUTO`
+  then `:TRIGger:RUN`) and wait for `:ACQuire:NUMACq?` to advance. A rate that
+  is *identical* across a wide timebase sweep is the signature of reading this
+  wrong, not of a scope that ignores the timebase.
 - **Interpolation / "ESR".** The headline `10 GSa/s ESR` is
   `:ACQuire:INTerpolation ON` (sin(x)/x) over a native 5 GSa/s per-channel
   ADC -- it yields more points, not more measured information, and does not

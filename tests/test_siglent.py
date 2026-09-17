@@ -790,14 +790,16 @@ class TestImpedanceOhmsToString:
             _impedance_ohms_to_string(75)
 
 
-def test_set_acquisition_writes_timebase_and_memory_depth() -> None:
+def test_set_acquisition_writes_the_timebase_and_not_the_memory_depth() -> None:
+    """The instrument rejects every :ACQuire:MDEPth spelling; only the
+    timebase reaches it, and the plan records the depth as intent only."""
     scope, fake = make_driver(("C1",))
     scope.connect()
 
     plan = scope.set_acquisition(sample_rate=1e6, record_length=10_000)
 
     assert ":TIMebase:SCALe 0.001" in fake.written
-    assert ":ACQuire:MDEPth 10k" in fake.written
+    assert not any(w.startswith(":ACQuire:MDEPth") for w in fake.written)
     assert plan == AcquisitionPlan(
         requested_sample_rate=1e6,
         requested_record_length=10_000,
@@ -827,7 +829,10 @@ def test_set_acquisition_reuses_the_other_value_on_a_later_call() -> None:
 
     assert plan.requested_sample_rate is None
     assert plan.requested_record_length == 20_000
-    assert ":ACQuire:MDEPth 1M" in fake.written  # 1e6 Hz * 0.02 s = 20_000 samples
+    # The depth is not written (the instrument rejects it); the plan carries
+    # 1M as intent, from 1e6 Hz * 0.02 s = 20_000 samples rounded up.
+    assert scope.last_acquisition is not None
+    assert scope.last_acquisition.memory_depth == "1M"
 
 
 def test_set_acquisition_pretrigger_requires_a_prior_window() -> None:
@@ -864,7 +869,8 @@ def test_configure_physical_sample_rate_and_record_length() -> None:
     scope.connect()
     scope.configure({"sample_rate": 1e6, "record_length": 10_000})
     assert ":TIMebase:SCALe 0.001" in fake.written
-    assert ":ACQuire:MDEPth 10k" in fake.written
+    assert scope.last_acquisition is not None
+    assert scope.last_acquisition.memory_depth == "10k"
 
 
 def test_configure_rejects_mixing_sample_rate_with_timebase() -> None:

@@ -22,11 +22,20 @@ acquire_timeout = 10.0
 # sample_rate omitted on purpose: an absent rate means "as fast as this
 # instrument goes", which the driver answers (5 GS/s per channel here, and it
 # does not drop when more channels are on -- each has its own converter).
-# 200 us, not 50: at 5 GS/s that is 1 Mpt, which lands exactly on a memory
-# depth step. 50 us needed 250 kpt, which MDEPTH_ENUM rounds *up* to 1M -- and
-# the scope then raises the rate to fill it, handing back 10 GS/s of which
-# half is reconstructed. The exact-fit windows at 5 GS/s are 2 us and 200 us.
-record_length = "200us"    # a time suffix means a window: the sample count
+# 500 us is the SHORTEST window this scope samples rather than interpolates.
+# Measured with apps/capture_studio/probe_timebase_map.py: memory depth is not
+# settable at all here (:ACQuire:MDEPth is rejected), so the scope stays in
+# AUTO and maximises the rate -- taking the interpolated 10 GS/s "ESR" at
+# every window up to 200 us. At 500 us (50 us/div) 10 GS/s would overrun
+# memory, so it falls back to the native 5 GS/s: 2.5 Mpt, all of them real.
+#
+#   200 us -> 10 GS/s, half the samples reconstructed
+#   500 us ->  5 GS/s, 2.5 Mpt, fully measured   <- here
+#     1 ms ->  1 GS/s
+#
+# A shorter window still works and loses no real information -- the ADC is
+# running at 5 GS/s either way -- but half the points it returns are padding.
+record_length = "500us"    # a time suffix means a window: the sample count
                            # follows the resolved rate, so a faster rate buys
                            # more samples over the same window, not less time.
                            # Write a bare number for a literal sample count.
@@ -59,7 +68,7 @@ acquire_timeout = 10.0
 # list above -- 5 GS/s with both, 10 GS/s the moment one is removed, with no
 # other edit. Because the window is fixed below, that buys twice the samples
 # over the same 50 us rather than halving the window.
-record_length = "200us"    # same window as the siglent, so the two line up
+record_length = "500us"    # same window as the siglent, so the two line up
 pretrigger = 0.5
 range = 0.2                # the card's most sensitive step; 0.2/0.5/1.0/2.5 V
 offset = 0.0
