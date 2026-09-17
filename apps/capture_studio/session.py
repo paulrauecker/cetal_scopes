@@ -29,9 +29,130 @@ from cetal_scopes.channel import Channel
 from cetal_scopes.shot import Shot
 from cetal_scopes.storage import load_shot, save_shot
 
-__all__ = ["SessionStatus", "StudioSession"]
+__all__ = ["SessionStatus", "StudioSession", "summarize_shot"]
 
 _MAX_LOG = 500
+
+
+def _eng(value: float | None, unit: str, digits: int = 4) -> str:
+    """Format a quantity with an SI prefix, e.g. ``2.000 GS/s``."""
+    if value is None:
+        return "?"
+    magnitude = abs(value)
+    for factor, prefix in (
+        (1e9, "G"),
+        (1e6, "M"),
+        (1e3, "k"),
+        (1.0, ""),
+        (1e-3, "m"),
+        (1e-6, "u"),
+        (1e-9, "n"),
+        (1e-12, "p"),
+    ):
+        if magnitude >= factor:
+            return f"{value / factor:.{digits}g} {prefix}{unit}"
+    return f"{value:.{digits}g} {unit}"
+
+
+def _differs(actual: float | None, asked: float | None, tolerance: float) -> bool:
+    """Whether a readback misses its request by more than ``tolerance`` (relative).
+
+    Sample rate is not directly settable on every instrument and a trigger
+    level is silently clamped, so a mismatch is not an error -- but it must be
+    visible rather than silent, which is the whole point of printing both.
+    """
+    if actual is None or asked is None:
+        return False
+    if asked == 0.0:
+        return actual != 0.0
+    return abs(actual - asked) > tolerance * abs(asked)
+
+
+def _asked_vs_got(actual: float | None, asked: float | None, unit: str) -> str:
+    """``got`` alone, or ``got (asked X)`` when the instrument did something else."""
+    got = _eng(actual, unit)
+    if _differs(actual, asked, 0.0025):
+        return f"{got} (asked {_eng(asked, unit)})"
+    return got
+
+
+def _trigger_line(metadata: Mapping[str, Any]) -> str | None:
+    """One line describing the trigger, or ``None`` if the driver records none.
+
+    Both hardware drivers store ``trigger_source``/``trigger_level_v``; the
+    Siglent additionally stores the *requested* level, because it clamps to
+    roughly +/-4.5 * V/div of the source channel without saying so.
+    """
+    source = metadata.get("trigger_source")
+    if source is None:
+        return None
+    parts = [f"trigger {source}"]
+    clamped = False
+    level = metadata.get("trigger_level_v")
+    if level is not None:
+        asked = metadata.get("trigger_level_requested_v")
+        clamped = _differs(float(level), asked, 0.0025)
+        parts.append(f"at {_asked_vs_got(float(level), asked, 'V')}")
+    slope = metadata.get("trigger_slope")
+    if slope is not None:
+        parts.append(str(slope))
+    mode = metadata.get("trigger_mode")
+    if mode is not None:
+        parts.append(f"[{mode}]")
+    if clamped:
+        parts.append("<-- clamped by the channel range")
+    return " ".join(parts)
+
+
+def summarize_shot(shot: Shot, *, verbose: bool = False) -> list[str]:
+    """Describe what each instrument in ``shot`` actually did.
+
+    Everything here comes from the capture metadata the drivers record at
+    fetch time, so a shot reloaded from disk describes itself the same way a
+    fresh one does.
+    """
+    lines: list[str] = []
+    for label, capture in shot.captures.items():
+        metadata = capture.metadata
+        rate = 1.0 / capture.dt if capture.dt > 0 else None
+        window = capture.n_samples * capture.dt
+        offset = shot.time_offset(label)
+
+        lines.append(f"{label}: {metadata.get('instrument', 'instrument')}")
+        lines.append(
+            "  "
+            + ", ".join(
+                [
+                    f"{len(capture.channels)} ch ({', '.join(capture.channels)})",
+                    _asked_vs_got(
+                        rate, metadata.get("sample_rate_requested_hz"), "S/s"
+                    ),
+                    f"{capture.n_samples} pts"
+                    + (
+                        f" (asked {metadata['record_length_requested']})"
+                        if metadata.get("record_length_requested")
+                        not in (None, capture.n_samples)
+                        else ""
+                    ),
+                    f"window {_eng(window, 's')}",
+                ]
+            )
+        )
+        detail = [f"t0 {_eng(capture.t0, 's')}", f"offset {_eng(offset, 's')}"]
+        if metadata.get("timebase_s_per_div") is not None:
+            detail.append(f"{_eng(metadata['timebase_s_per_div'], 's')}/div")
+        if metadata.get("memory_depth") is not None:
+            detail.append(f"depth {metadata['memory_depth']}")
+        lines.append("  " + ", ".join(detail))
+
+        trigger = _trigger_line(metadata)
+        if trigger is not None:
+            lines.append(f"  {trigger}")
+
+        if verbose:
+            for key in sorted(metadata):
+                lines.append(f"    {key} = {metadata[key]!r}")
+    return lines
 
 
 @dataclass
@@ -57,13 +178,25 @@ class StudioSession:
     config_path : Path, optional
         Where :meth:`save_inventory_file` writes. ``None`` means the inventory
         came from nowhere on disk and cannot be saved without a path.
+    echo : bool, default True
+        Also write the session log to stdout, so a bench run leaves a record
+        in the terminal and not only in a browser tab that may be closed.
+    verbose : bool, default False
+        Include every metadata key of every capture in the shot summary.
     """
 
     def __init__(
-        self, inventory: Inventory, *, config_path: Path | None = None
+        self,
+        inventory: Inventory,
+        *,
+        config_path: Path | None = None,
+        echo: bool = True,
+        verbose: bool = False,
     ) -> None:
         self._inventory = inventory
         self._config_path = config_path
+        self._echo = echo
+        self._verbose = verbose
         self._lock = asyncio.Lock()
         self._run: MultiScopeAcquisition | None = None
         self._result: ShotResult | None = None
@@ -217,6 +350,11 @@ class StudioSession:
         self._log_line(self._status.message)
         for item in result.failures:
             self._log_line(f"  {item.label}: {item.state} {item.error or ''}".rstrip())
+        if result.shot is not None:
+            if result.arm_spread_s is not None:
+                self._log_line(f"  arm spread {_eng(result.arm_spread_s, 's')}")
+            for line in summarize_shot(result.shot, verbose=self._verbose):
+                self._log_line(line)
         return result
 
     async def abort(self) -> None:
@@ -415,6 +553,8 @@ class StudioSession:
         self._log.clear()
 
     def _log_line(self, message: str) -> None:
+        if self._echo:
+            print(message, flush=True)
         entry = {"t": datetime.now(UTC).isoformat(), "message": message}
         self._log.append(entry)
         del self._log[:-_MAX_LOG]

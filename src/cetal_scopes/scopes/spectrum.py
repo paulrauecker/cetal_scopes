@@ -476,6 +476,15 @@ class SpectrumM5i3367(Scope):
         """Channels acquired by :meth:`acquire` / :meth:`acquire_segments`."""
         return self._channels
 
+    @classmethod
+    def max_sample_rate(cls, n_channels: int) -> float | None:
+        """:data:`MAX_RATE_1CH_HZ` with one channel, :data:`MAX_RATE_2CH_HZ` with two.
+
+        The card interleaves its converters, so the second channel costs half
+        the rate (manual p. 19). Dropping a channel really does double it.
+        """
+        return snap_sample_rate(float("inf"), n_channels=n_channels)
+
     def connect(self) -> None:
         """Open the card and identify it."""
         if self._connected:

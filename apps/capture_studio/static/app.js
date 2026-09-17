@@ -645,49 +645,24 @@ function adoptShot(payload) {
   renderShotMeta();
 }
 
-// What the inventory asked this instrument for, so the achieved numbers can
-// be shown against it. Sample rate is not directly settable on every scope
-// (the Siglent derives it from timebase x memory depth), so a mismatch here
-// is normal -- but it should be visible rather than silent.
-function requestedFor(label) {
-  const item = (state.inventory?.instruments ?? []).find(
-    (entry) => entry.label === label,
-  );
-  const settings = item?.settings ?? {};
-  return {
-    sample_rate: Number(settings.sample_rate) || null,
-    record_length: Number(settings.record_length) || null,
-  };
-}
-
-// Within a quarter percent counts as "as asked": the scope reports its rate
-// to a few digits and our own dt round-trips through a float.
-function matches(actual, asked) {
-  return asked == null || Math.abs(actual - asked) <= 0.0025 * asked;
-}
-
+// The shot summary is built server-side (session.summarize_shot) from the
+// capture metadata the drivers record at fetch time, so the browser and the
+// terminal say exactly the same thing about what the instruments did.
 function renderShotMeta() {
-  if (!state.shot) {
-    $("shot-meta").textContent = "";
-    return;
+  const host = $("shot-meta");
+  host.textContent = "";
+  const summary = state.shot?.summary ?? [];
+  if (!summary.length) return;
+  for (const line of summary) {
+    const row = document.createElement("div");
+    // Leading spaces carry the indent the server chose; keep them.
+    row.className = line.startsWith(" ") ? "summary-detail" : "summary-head";
+    row.textContent = line.trim();
+    if (line.includes("asked") || line.includes("clamped")) {
+      row.classList.add("summary-flag");
+    }
+    host.append(row);
   }
-  const parts = state.shot.captures.map((capture) => {
-    const asked = requestedFor(capture.label);
-    const rate = `${(capture.sample_rate / 1e6).toPrecision(4)} MS/s`;
-    const notes = [];
-    if (!matches(capture.sample_rate, asked.sample_rate)) {
-      notes.push(`asked ${(asked.sample_rate / 1e6).toPrecision(4)} MS/s`);
-    }
-    if (!matches(capture.n_samples, asked.record_length)) {
-      notes.push(`asked ${asked.record_length} pts`);
-    }
-    const flag = notes.length ? ` ⚠ ${notes.join(", ")}` : "";
-    return (
-      `${capture.label}: ${capture.channels.length} ch, ` +
-      `${capture.n_samples} pts @ ${rate}${flag}`
-    );
-  });
-  $("shot-meta").textContent = parts.join(" · ");
 }
 
 // ---------------------------------------------------------------------------
@@ -701,8 +676,12 @@ function renderShotMeta() {
 // single number they are not.
 
 const SETTING_FIELDS = [
-  ["sample_rate", "number", "Hz"],
-  ["record_length", "number", "samples"],
+  // Blank is meaningful for these two: the inventory describes the whole
+  // desired state, so an empty field means "as high as this instrument goes"
+  // and the driver answers. The ceiling follows the channel list, so clearing
+  // the rate on an interleaved card makes it rise when a channel is dropped.
+  ["sample_rate", "number", "Hz — blank means as fast as the instrument goes"],
+  ["record_length", "number", "samples — blank means as deep as it goes (slow!)"],
   ["pretrigger", "number", "fraction of the record (0-1), or whole samples"],
   ["range", "number", "V full-scale (the channel spans ±range)"],
   ["offset", "number", "V"],

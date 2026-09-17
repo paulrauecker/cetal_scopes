@@ -28,7 +28,7 @@ from figures import (
 )
 from processing import ProcessingStep, step_catalog
 from pydantic import BaseModel, ConfigDict, Field
-from session import StudioSession
+from session import StudioSession, summarize_shot
 
 from cetal_scopes.scopes.registry import DRIVERS
 
@@ -554,6 +554,7 @@ def _shot_payload(session: StudioSession) -> dict[str, Any]:
             "captures": captures,
             "fitted_offsets": fitted,
             "instruments": instruments,
+            "summary": summarize_shot(shot),
             "metadata": _jsonable(shot.metadata),
         },
         "status": _status_payload(session),

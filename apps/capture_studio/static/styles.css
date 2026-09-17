@@ -98,8 +98,13 @@ main {
 }
 .panel-head h2 { font-size: 13px; margin: 0; font-weight: 600; }
 
+/* The figures carry their own height (figures.PLOT_HEIGHT and
+   stacked_height), so this is only a floor for the moment before the first
+   one arrives. The panel clips for its rounded corners, so nothing inside it
+   may be taller than it is. */
 .plot { min-height: 300px; background: var(--bg); }
 .panel:first-of-type .plot { min-height: 400px; }
+.plot .js-plotly-plot, .plot .plot-container { max-width: 100%; }
 
 .note { color: var(--muted); font-size: 12px; padding: 0 12px; }
 
@@ -203,3 +208,14 @@ td.state-bad { color: var(--bad); }
   flex-wrap: wrap;
 }
 .instrument-vertical:empty { display: none; }
+
+/* The shot summary: what each instrument actually did, as the server
+   rendered it. Indented rows are the detail under an instrument's name. */
+#shot-meta { padding: 6px 12px; display: grid; gap: 1px; }
+.summary-head { font-weight: 600; color: var(--fg); margin-top: 4px; }
+.summary-head:first-child { margin-top: 0; }
+.summary-detail {
+  padding-left: 14px;
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+}
+.summary-flag { color: var(--bad); }

@@ -247,7 +247,62 @@ it.
 --host ADDR          bind address (default: 127.0.0.1)
 --port N             bind port (default: 8000)
 --log-level LEVEL    uvicorn log level (default: warning)
+-v, --verbose        add every capture metadata key to the shot summary
+-q, --quiet          do not echo the session log to the terminal
 ```
+
+## Blank means "as high as it goes"
+
+The inventory describes the whole desired state of the bench, so unlike a bare
+`configure()` call -- where an absent key means "leave this alone" -- leaving
+`sample_rate` or `record_length` out of the TOML (or clearing the field in the
+Instruments panel) means **take this instrument's ceiling**. The driver
+answers, via `Scope.max_sample_rate(n_channels)`; nothing is duplicated here.
+
+The ceiling follows the channel list, which is the useful part:
+
+```toml
+channels = ["CH0", "CH1"]   # M5i: 5 GS/s      (both converters interleaved)
+channels = ["CH0"]          # M5i: 10 GS/s     -- no other edit needed
+```
+
+The Siglent's four channels each have their own converter, so its ceiling
+stays 5 GS/s however many are on. A driver that does not know its own ceiling
+(the demo scope) leaves the key absent and the instrument keeps what it had.
+
+Note what a *fixed* `record_length` does when the rate rises: the window
+halves. And leaving `record_length` blank asks for the deepest record the
+instrument has -- 1 Gpt on the Siglent, which is gigabytes over the socket.
+The ceiling is rarely the value you want for that one.
+
+## What a shot reports
+
+After every shot the session prints a summary -- to the terminal and to the
+log panel in the browser, from the same server-side `summarize_shot`, so the
+two cannot drift:
+
+```
+shot 20260917T142627.282478Z: complete
+  arm spread 206.1 us
+siglent: Siglent SDS6204L
+  2 ch (C1, C2), 10 GS/s (asked 2 GS/s), 1000000 pts (asked 100000), window 100 us
+  t0 -25 us, offset 0 s, 5 us/div, depth 1M
+  trigger C1 at 45 mV (asked 500 mV) RISing [SINGle] <-- clamped by the channel range
+```
+
+Everything comes from the capture metadata the drivers record at fetch time,
+so a shot reloaded from disk describes itself the same way a fresh one does.
+
+Two numbers are shown as *achieved (asked X)* whenever they disagree, because
+neither is directly settable and both fail quietly:
+
+- **Sample rate.** The Siglent derives it from timebase x memory depth, so a
+  record length that snaps up to the next depth step silently raises the rate.
+- **Trigger level.** The Siglent clamps it to roughly +/-4.5 x V/div of the
+  source channel and does not say so; the summary reads it back.
+
+A driver that records no trigger (the demo scope) simply gets no trigger line.
+`--verbose` appends every metadata key under each instrument.
 
 ## Notes
 

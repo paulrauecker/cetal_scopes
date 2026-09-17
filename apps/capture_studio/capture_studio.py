@@ -66,6 +66,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level", default="warning", help="uvicorn log level (default: warning)."
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=(
+            "Print every metadata key of every capture in the shot summary. "
+            "The summary itself (sample rate, window, trigger) is printed "
+            "either way; use --quiet to suppress it."
+        ),
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Do not echo the session log to the terminal.",
+    )
     return parser
 
 
@@ -96,7 +112,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         config_path = None
 
-    session = StudioSession(inventory, config_path=config_path)
+    session = StudioSession(
+        inventory,
+        config_path=config_path,
+        echo=not args.quiet,
+        verbose=args.verbose,
+    )
     root_path = normalise_root_path(args.root_path)
     app = with_root_path(create_app(session, root_path), root_path)
 

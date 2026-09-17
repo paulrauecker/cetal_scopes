@@ -29,6 +29,7 @@ from cetal_scopes.scopes.base import Scope
 
 __all__ = [
     "DEFAULT_INTERPOLATION",
+    "MAX_RATE_HZ",
     "VDIV_LADDER",
     "AcquisitionPlan",
     "SiglentSDS6204L",
@@ -316,6 +317,13 @@ MDEPTH_ENUM: tuple[tuple[int, str], ...] = (
 #: choice rather than an acquisition one -- so it is off by default, to be
 #: applied deliberately downstream where it is visible in the code.
 DEFAULT_INTERPOLATION = "OFF"
+
+#: Native ADC rate, per channel (manual: 5 GSa/s at each of the four
+#: channels, independent of how many are on -- each has its own converter).
+#: The 10 GSa/s "ESR" headline is :data:`DEFAULT_INTERPOLATION` turned on,
+#: which reconstructs points rather than measuring them, so it is not a rate
+#: this driver will ever ask for.
+MAX_RATE_HZ = 5e9
 
 
 def snap_mdepth(samples: int) -> str:
@@ -743,6 +751,9 @@ class SiglentSDS6204L(Scope):
         self._connected = False
         self._idn = ""
         self._interpolation = DEFAULT_INTERPOLATION
+        self._trigger_source: str | None = None
+        self._trigger_level: float | None = None
+        self._trigger_slope: str | None = None
         self._last_sample_rate: float | None = None
         self._last_window_s: float | None = None
         self._last_record_length: int | None = None
@@ -788,6 +799,24 @@ class SiglentSDS6204L(Scope):
     def last_acquisition(self) -> AcquisitionPlan | None:
         """The most recent :meth:`set_acquisition` result, or ``None`` if never called."""
         return self._last_acquisition_plan
+
+    @classmethod
+    def max_sample_rate(cls, n_channels: int) -> float | None:
+        """:data:`MAX_RATE_HZ`, whatever the channel count.
+
+        The four channels do not share a converter, so unlike an interleaved
+        digitiser this scope gives up no rate for using all of them.
+        """
+        return MAX_RATE_HZ
+
+    @classmethod
+    def max_record_length(cls, n_channels: int) -> int | None:
+        """The deepest step of :data:`MDEPTH_ENUM`.
+
+        Note this is 1 Gpt: a full-depth fetch is gigabytes over the socket
+        and takes minutes. It is the ceiling, not a sensible default.
+        """
+        return MDEPTH_ENUM[-1][0]
 
     def connect(self) -> None:
         """Open the socket and identify the instrument."""
@@ -1054,10 +1083,13 @@ class SiglentSDS6204L(Scope):
         self._write(":TRIGger:TYPE EDGE")
         if source is not None:
             self._write(f":TRIGger:EDGE:SOURce {source}")
+            self._trigger_source = str(source)
         if level is not None:
             self._write(f":TRIGger:EDGE:LEVel {float(level):.6g}")
+            self._trigger_level = float(level)
         if slope is not None:
             self._write(f":TRIGger:EDGE:SLOPe {slope}")
+            self._trigger_slope = str(slope)
 
     def trigger_level(self) -> float:
         """Return the edge-trigger level in volts, as the instrument reports it.
@@ -1251,6 +1283,13 @@ class SiglentSDS6204L(Scope):
             "sample_rate_hz": 1.0 / dt if dt > 0 else None,
             "record_length": n_samples,
             "trigger_mode": self._trigger_mode,
+            "trigger_source": self._trigger_source,
+            "trigger_slope": self._trigger_slope,
+            # Requested vs. achieved: the level is silently clamped to roughly
+            # +/-4.5 * V/div of the source channel, so the readback is the only
+            # honest record of what the instrument actually triggered on.
+            "trigger_level_requested_v": self._trigger_level,
+            "trigger_level_v": self._trigger_level_readback(),
             "streaming": self._streaming,
             "timestamp": datetime.now(UTC).isoformat(),
         }
@@ -1259,7 +1298,22 @@ class SiglentSDS6204L(Scope):
             metadata["timebase_s_per_div"] = plan.timebase
             metadata["memory_depth"] = plan.memory_depth
             metadata["delay_s"] = plan.delay
+            metadata["sample_rate_requested_hz"] = plan.requested_sample_rate
+            metadata["record_length_requested"] = plan.requested_record_length
         return metadata
+
+    def _trigger_level_readback(self) -> float | None:
+        """The instrument's own trigger level, or ``None`` if it will not say.
+
+        Provenance must not be able to fail a fetch that otherwise succeeded,
+        so a transport or parse problem here degrades to ``None``.
+        """
+        if self._trigger_source is None:
+            return None
+        try:
+            return self.trigger_level()
+        except (OSError, ValueError):
+            return None
 
     def _fetch_codes(self, channel: str) -> tuple[NDArray[Any], WaveDesc]:
         self._write(f":WAVeform:SOURce {channel}")

@@ -182,3 +182,58 @@ def test_invalid_toml_is_reported_with_the_path(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="is not valid TOML"):
         load_inventory(path)
+
+
+# --- a blank field means "as high as this instrument goes" ------------------
+
+
+def instrument(
+    driver: str, channels: list[str], **settings: object
+) -> InstrumentConfig:
+    return InstrumentConfig(
+        label="x", driver=driver, channels=channels, settings=dict(settings)
+    )
+
+
+def test_an_absent_sample_rate_resolves_to_the_drivers_ceiling() -> None:
+    resolved = instrument("siglent_sds6204l", ["C1"]).resolved_settings()
+    assert resolved["sample_rate"] == 5e9
+
+
+def test_a_given_sample_rate_is_left_alone() -> None:
+    resolved = instrument(
+        "siglent_sds6204l", ["C1"], sample_rate=1e9
+    ).resolved_settings()
+    assert resolved["sample_rate"] == 1e9
+
+
+def test_the_siglent_ceiling_does_not_drop_with_more_channels() -> None:
+    """Four independent converters: using all of them costs no rate."""
+    one = instrument("siglent_sds6204l", ["C1"]).resolved_settings()
+    four = instrument("siglent_sds6204l", ["C1", "C2", "C3", "C4"]).resolved_settings()
+    assert one["sample_rate"] == four["sample_rate"] == 5e9
+
+
+def test_dropping_a_channel_raises_the_m5i_ceiling() -> None:
+    """The card interleaves, so the second channel costs half the rate."""
+    two = instrument("spectrum_m5i3367", ["CH0", "CH1"]).resolved_settings()
+    one = instrument("spectrum_m5i3367", ["CH0"]).resolved_settings()
+    assert two["sample_rate"] == 5e9
+    assert one["sample_rate"] == 10e9
+
+
+def test_an_absent_record_length_resolves_to_the_deepest_step() -> None:
+    resolved = instrument("siglent_sds6204l", ["C1"]).resolved_settings()
+    assert resolved["record_length"] == 1_000_000_000
+
+
+def test_a_driver_that_knows_no_ceiling_leaves_the_keys_absent() -> None:
+    """Better an untouched instrument than a guessed rate."""
+    resolved = instrument("demo", ["CH1"]).resolved_settings()
+    assert "sample_rate" not in resolved
+    assert "record_length" not in resolved
+
+
+def test_resolution_reaches_the_driver_through_build() -> None:
+    spec = instrument("spectrum_m5i3367", ["CH0"]).build()
+    assert spec.settings["sample_rate"] == 10e9

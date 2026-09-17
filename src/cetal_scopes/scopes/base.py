@@ -96,6 +96,36 @@ class Scope(ABC):
             Instrument settings, keyed by a driver-defined name.
         """
 
+    @classmethod
+    def max_sample_rate(cls, n_channels: int) -> float | None:
+        """The highest sample rate this instrument can reach, or ``None``.
+
+        A ceiling that depends on how many channels are acquired: interleaved
+        digitisers trade channels for rate. ``None`` means the driver does not
+        know its own ceiling, and a caller asking to "go as fast as possible"
+        must leave the rate alone rather than guess.
+
+        Parameters
+        ----------
+        n_channels : int
+            How many channels will be acquired together.
+
+        Returns
+        -------
+        float or None
+            Samples per second, or ``None`` if unknown.
+        """
+        return None
+
+    @classmethod
+    def max_record_length(cls, n_channels: int) -> int | None:
+        """The deepest record this instrument can take, or ``None`` if unknown.
+
+        See :meth:`max_sample_rate`. Note that the deepest record is rarely
+        the one you want: it is also the slowest to transfer.
+        """
+        return None
+
     @abstractmethod
     def acquire(self) -> Capture:
         """Run one acquisition and return the normalized capture.
