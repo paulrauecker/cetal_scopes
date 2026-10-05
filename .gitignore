@@ -219,3 +219,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local vendor reference material (calibration workbooks, datasheet plots,
+# one-off analysis scripts). Kept out of the repo and the wheel.
+vendor_refs/
+
+# Local planning notes, not part of the repo.
+plans/

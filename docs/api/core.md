@@ -10,6 +10,10 @@
 
 ::: cetal_scopes.Shot
 
+## Reference antennas
+
+::: cetal_scopes.antennas.aaronia.pbs1
+
 ## Persistence
 
 ::: cetal_scopes.load_capture

@@ -8,6 +8,17 @@ response via coherent (matched-filter) detection at the commanded frequency,
 and plots one trace per channel: dB gain relative to the source level by
 default, or raw Vpp with ``--raw-volts``.
 
+.. warning::
+
+   **NEVER pump +30 dBm from the SG8 into the scope.** In any conducted setup
+   (RF Out cabled or split into a channel, or a terminated loop feeding a
+   channel) the generator drives a scope input directly. The SG8 reaches
+   ~+30 dBm, i.e. ~7 Vrms into 50 ohm -- very likely above the SDS6204L's
+   50 ohm input rating (check its datasheet; such inputs are typically rated
+   around 5 Vrms or less). Keep ``--power`` at or below 0 dBm when conducted,
+   or put a 20 dB attenuator in front of the scope first. Only radiated
+   setups (antenna on RF Out, probe on the channel) leave the margin for more.
+
 The scope's timebase is set **once**, sized for ``--cycles`` periods of the
 sweep's *lowest* frequency, and reused unchanged for every point -- a scope
 holds its full real-time sample rate across a wide range of window sizes, so
