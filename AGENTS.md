@@ -2,7 +2,7 @@
 
 ## Project status
 
-Early scaffold. `Capture`, `Channel`, `Antenna` (with a frequency-dependent
+Working library, in use on the bench. `Capture`, `Channel`, `Antenna` (with a frequency-dependent
 `TransferFunction`) live in `src/cetal_scopes/{capture,channel,antenna}.py` and
 are exported from `__init__.py`; the pydantic `CaptureFile` schema is in
 `metadata.py` and `load_capture` / `save_capture` in `storage.py`. The `Scope`
