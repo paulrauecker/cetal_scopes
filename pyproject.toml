@@ -46,6 +46,7 @@ pythonpath = [
     "apps/sg8_sweep",
     "apps/rf_waterfall",
     "apps/capture_studio",
+    "apps/bdot_vector",
 ]
 
 [tool.pyright]
@@ -56,6 +57,7 @@ extraPaths = [
     "apps/sg8_sweep",
     "apps/rf_waterfall",
     "apps/capture_studio",
+    "apps/bdot_vector",
 ]
 
 [tool.uv.workspace]
