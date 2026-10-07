@@ -62,6 +62,7 @@ class FakeCard:
         bytes_per_sample: int = 2,
         function_type: int = SPCM_TYPE_AI,
         timeout: bool = False,
+        dma_unfinished_polls: int = 0,
     ) -> None:
         self.registers: dict[int, int] = {}
         self.commands: list[int] = []
@@ -75,6 +76,9 @@ class FakeCard:
         self._bytes_per_sample = bytes_per_sample
         self._function_type = function_type
         self._timeout = timeout
+        # How many status reads report the DMA as still running -- a card
+        # whose wait returned before the transfer finished.
+        self.dma_unfinished_polls = dma_unfinished_polls
 
     def open(self, device: str) -> None:
         self.opened_device = device
@@ -91,6 +95,11 @@ class FakeCard:
             return self._max_adc
         if register == spectrum.SPC_MIINST_BYTESPERSAMPLE:
             return self._bytes_per_sample
+        if register == spectrum.SPC_M2STATUS:
+            if self.dma_unfinished_polls > 0:
+                self.dma_unfinished_polls -= 1
+                return 0
+            return spectrum.M2STAT_DATA_END
         raise AssertionError(f"unexpected get_i32({register})")
 
     def get_i64(self, register: int) -> int:
@@ -505,7 +514,8 @@ def test_acquire_writes_registers_in_the_documented_order() -> None:
     assert card.commands == [
         M2CMD_CARD_RESET,
         M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA,
-        M2CMD_CARD_WAITREADY | M2CMD_DATA_WAITDMA,
+        M2CMD_CARD_WAITREADY,
+        M2CMD_DATA_WAITDMA,
         M2CMD_DATA_STOPDMA,
     ]
     assert card.registers[SPC_CHENABLE] == 1
@@ -539,6 +549,23 @@ def test_metadata_records_the_requested_rate_beside_the_achieved_one() -> None:
 
     assert capture.metadata["sample_rate_requested_hz"] == pytest.approx(2e9)
     assert "sample_rate_hz" in capture.metadata
+
+
+def test_wait_is_not_done_until_the_dma_has_finished() -> None:
+    """A wait that returns mid-transfer must not let fetch() read the buffer.
+
+    On the bench this left the tail of the record as zeros, cut at a
+    different point every shot.
+    """
+    card = FakeCard(dma_unfinished_polls=2)
+    scope = SpectrumM5i3367(card=card)
+    scope.connect()
+    scope.configure({"record_length": 32})
+    scope.arm()
+
+    assert scope.wait(0.1) is False
+    assert scope.wait(0.1) is False
+    assert scope.wait(0.1) is True
 
 
 def test_acquire_timeout_stops_the_card_and_raises() -> None:

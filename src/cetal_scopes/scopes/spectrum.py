@@ -79,6 +79,7 @@ _CONFIG_KEYS = PHYSICAL_KEYS | _PANEL_KEYS
 # Register numbers (see docs/scopes/M5i.3367-x16/code.md for the full tables)
 # ---------------------------------------------------------------------------
 SPC_M2CMD = 100
+SPC_M2STATUS = 110
 SPC_TIMEOUT = 295130
 SPC_FNCTYPE = 2001
 SPC_PCITYP = 2000
@@ -125,6 +126,8 @@ M2CMD_CARD_WAITREADY = 16384
 M2CMD_DATA_STARTDMA = 65536
 M2CMD_DATA_WAITDMA = 131072
 M2CMD_DATA_STOPDMA = 262144
+
+M2STAT_DATA_END = 0x200
 
 #: Accepted spellings of the card's external trigger input (Ext0, "Trig In").
 _EXTERNAL_SOURCES = frozenset({"EXT", "EXT0", "EX"})
@@ -799,14 +802,19 @@ class SpectrumM5i3367(Scope):
         if not self._armed:
             raise RuntimeError("wait() called before arm()")
         limit = self._acquire_timeout if timeout is None else timeout
+        timeout_ms = max(1, int(limit * 1000))
+        # Two commands, as in the vendor's standard-mode example: given
+        # WAITREADY | WAITDMA in one command, the card was seen returning
+        # once the acquisition ended but mid-DMA, so fetch() read a buffer
+        # whose tail was still the zeros it was allocated with.
         try:
-            card.command(
-                M2CMD_CARD_WAITREADY | M2CMD_DATA_WAITDMA,
-                timeout_ms=max(1, int(limit * 1000)),
-            )
+            card.command(M2CMD_CARD_WAITREADY, timeout_ms=timeout_ms)
+            card.command(M2CMD_DATA_WAITDMA, timeout_ms=timeout_ms)
         except TimeoutError:
             return False
-        return True
+        # The status register, not the wait returning, is what says the
+        # whole transfer has landed in the buffer.
+        return bool(card.get_i32(SPC_M2STATUS) & M2STAT_DATA_END)
 
     def fetch(self) -> Capture:
         """Return the completed Standard Single acquisition.
