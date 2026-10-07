@@ -14,6 +14,10 @@
 
 ::: cetal_scopes.antennas.aaronia.pbs1
 
+## Antenna catalogue
+
+::: cetal_scopes.antennas.catalog
+
 ## Persistence
 
 ::: cetal_scopes.load_capture

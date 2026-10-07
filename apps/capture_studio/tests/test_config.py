@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 from config import (
+    ChannelAntenna,
     InstrumentConfig,
     Inventory,
     build_specs,
@@ -19,7 +20,8 @@ from config import (
     save_inventory,
 )
 
-from cetal_scopes import DemoScope, SiglentSDS6204L, SpectrumM5i3367
+from cetal_scopes import Antenna, DemoScope, SiglentSDS6204L, SpectrumM5i3367
+from cetal_scopes.antennas import AntennaCatalog
 
 BENCH = """
 poll_interval = 0.1
@@ -343,3 +345,90 @@ def test_a_negative_duration_is_refused() -> None:
     config = instrument("siglent_sds6204l", ["C1"], record_length="-3us")
     with pytest.raises(ValueError, match="must be positive"):
         config.resolved_settings()
+
+
+# ---------------------------------------------------------------------------
+# Antennas
+# ---------------------------------------------------------------------------
+
+WITH_ANTENNAS = """
+[[instrument]]
+label = "siglent"
+driver = "siglent_sds6204l"
+address = "192.168.5.126"
+channels = ["C1", "C2", "C4"]
+
+[instrument.antennas]
+C1 = "bdot-medium"
+C4 = "PBS-H3"
+
+[instrument.antennas.C2]
+antenna = "bdot-large"
+delay = 2.5e-9
+axis = [0.0, 0.0, 1.0]
+"""
+
+CATALOG = AntennaCatalog(
+    {
+        "bdot-medium": Antenna(name="bdot-medium", kind="b-dot"),
+        "bdot-large": Antenna(name="bdot-large", kind="b-dot"),
+    }
+)
+
+
+def test_channel_antennas_are_parsed_in_both_spellings() -> None:
+    item = parse_inventory(tomllib.loads(WITH_ANTENNAS)).instruments[0]
+
+    assert item.antennas["C1"] == "bdot-medium"
+    assert item.antennas["C2"] == ChannelAntenna(
+        antenna="bdot-large", delay=2.5e-9, axis=[0.0, 0.0, 1.0]
+    )
+
+
+def test_channel_antennas_resolve_through_the_catalogue() -> None:
+    item = parse_inventory(tomllib.loads(WITH_ANTENNAS)).instruments[0]
+
+    antennas = item.resolved_antennas(CATALOG)
+
+    assert antennas["C1"] is CATALOG["bdot-medium"]
+    assert antennas["C2"].delay == 2.5e-9
+    assert antennas["C2"].unit_axis is not None
+    assert antennas["C4"].transfer_function is not None  # the vendor calibration
+
+
+def test_build_hands_the_antennas_to_the_spec() -> None:
+    item = parse_inventory(tomllib.loads(WITH_ANTENNAS)).instruments[0]
+
+    spec = item.build(CATALOG)
+
+    assert sorted(spec.antennas) == ["C1", "C2", "C4"]
+
+
+def test_an_unknown_antenna_names_the_instrument_and_channel() -> None:
+    inventory = parse_inventory(tomllib.loads(WITH_ANTENNAS))
+
+    # Only the built-ins: both custom names are missing, and both are reported.
+    with pytest.raises(ValueError, match=r"siglent C1: unknown antenna") as info:
+        inventory.check_antennas(AntennaCatalog())
+    assert "siglent C2" in str(info.value)
+    inventory.check_antennas(CATALOG)
+
+
+def test_disabled_instruments_have_their_antennas_checked_too() -> None:
+    inventory = parse_inventory(tomllib.loads(WITH_ANTENNAS))
+    inventory.instruments[0].enabled = False
+
+    with pytest.raises(ValueError, match="unknown antenna"):
+        inventory.check_antennas(AntennaCatalog())
+
+
+def test_an_antenna_on_a_channel_not_acquired_is_rejected() -> None:
+    with pytest.raises(ValueError, match=r"channels not in 'channels': \['C3'\]"):
+        InstrumentConfig(
+            label="x", driver="demo", channels=["C1"], antennas={"C3": "PBS-H3"}
+        )
+
+
+def test_channel_antennas_round_trip_through_the_writer() -> None:
+    original = parse_inventory(tomllib.loads(WITH_ANTENNAS))
+    assert parse_inventory(tomllib.loads(dumps_toml(original))) == original

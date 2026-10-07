@@ -558,6 +558,7 @@ class MultiScopeAcquisition:
             self._instrument(label, "error", error=repr(exc))
             await self._scopes[label].abort()
             return
+        captures = [spec.annotate(capture) for capture in captures]
 
         if untriggered:
             # Stamped and still reported as a timeout, so this can never be

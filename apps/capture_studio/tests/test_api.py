@@ -75,6 +75,44 @@ def test_an_invalid_inventory_is_rejected_with_a_reason(client: TestClient) -> N
     assert "unknown driver" in response.json()["detail"]
 
 
+def test_the_antenna_catalogue_is_served(client: TestClient) -> None:
+    antennas = {
+        entry["name"]: entry
+        for entry in client.get("/api/inventory").json()["antennas"]
+    }
+
+    h3 = antennas["PBS-H3"]
+    assert h3["calibrated"] is True
+    assert h3["unit"] == "V/(T/s)"
+    assert h3["f_max"] == 50e6
+    assert h3["gain"] > 0
+
+
+def test_picked_antennas_reach_the_captured_shot(
+    client: TestClient, session: StudioSession
+) -> None:
+    inventory = client.get("/api/inventory").json()["inventory"]
+    inventory["instruments"][0]["antennas"] = {"CH1": "PBS-H3"}
+    response = client.put("/api/inventory", json={"inventory": inventory})
+    assert response.status_code == 200, response.text
+
+    capture(client)
+
+    shot = session.require_shot()
+    assert shot["demo1"]["CH1"].antenna is session.antennas["PBS-H3"]
+    assert shot["demo1"]["CH2"].antenna is None
+
+
+def test_an_unknown_antenna_is_rejected_with_a_reason(client: TestClient) -> None:
+    inventory = client.get("/api/inventory").json()["inventory"]
+    inventory["instruments"][0]["antennas"] = {"CH1": "bdot-nope"}
+
+    response = client.put("/api/inventory", json={"inventory": inventory})
+
+    assert response.status_code == 400
+    assert "unknown antenna 'bdot-nope'" in response.json()["detail"]
+
+
 def test_the_inventory_can_be_written_to_disk(
     client: TestClient, tmp_path: Path
 ) -> None:

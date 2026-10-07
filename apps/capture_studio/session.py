@@ -34,6 +34,7 @@ from cetal_scopes.acquisition import (
 )
 from cetal_scopes.analysis import align_shot
 from cetal_scopes.analysis.results import TimeOffset
+from cetal_scopes.antennas import AntennaCatalog
 from cetal_scopes.capture import Capture
 from cetal_scopes.channel import Channel
 from cetal_scopes.shot import Shot
@@ -247,6 +248,14 @@ class StudioSession:
         in the terminal and not only in a browser tab that may be closed.
     verbose : bool, default False
         Include every metadata key of every capture in the shot summary.
+    antennas : AntennaCatalog, optional
+        Resolves the inventory's per-channel antenna names. The default holds
+        only the built-in reference probes.
+
+    Raises
+    ------
+    ValueError
+        If the inventory names an antenna the catalogue does not have.
     """
 
     def __init__(
@@ -256,7 +265,10 @@ class StudioSession:
         config_path: Path | None = None,
         echo: bool = True,
         verbose: bool = False,
+        antennas: AntennaCatalog | None = None,
     ) -> None:
+        self._antennas = antennas if antennas is not None else AntennaCatalog()
+        inventory.check_antennas(self._antennas)
         self._inventory = inventory
         self._config_path = config_path
         self._echo = echo
@@ -282,6 +294,11 @@ class StudioSession:
         return self._inventory
 
     @property
+    def antennas(self) -> AntennaCatalog:
+        """The antennas the inventory can name."""
+        return self._antennas
+
+    @property
     def config_path(self) -> Path | None:
         """Where the inventory is saved, when it has a home on disk."""
         return self._config_path
@@ -293,7 +310,10 @@ class StudioSession:
         ------
         RuntimeError
             If a shot is in progress.
+        ValueError
+            If the inventory names an antenna the catalogue does not have.
         """
+        inventory.check_antennas(self._antennas)
         async with self._lock:
             if self._status.busy:
                 raise RuntimeError("cannot change the inventory during a shot")
@@ -340,7 +360,7 @@ class StudioSession:
         async with self._lock:
             if self._run is not None:
                 return
-            specs = build_specs(self._inventory)
+            specs = build_specs(self._inventory, self._antennas)
             run = MultiScopeAcquisition(
                 specs,
                 poll_interval=self._inventory.poll_interval,

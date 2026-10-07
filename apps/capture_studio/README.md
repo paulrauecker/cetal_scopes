@@ -125,6 +125,47 @@ instrument in the file but out of the run.
 
 Drivers: `siglent_sds6204l`, `spectrum_m5i3367`, `demo`.
 
+### Antennas
+
+Each channel can name the probe on it, and that probe's `Antenna` (with its
+calibration) is attached to every capture the instrument returns, so a saved
+shot records which probe took which trace and the B-dot processing steps
+(`dB/dt`, `B`) have a calibration to apply:
+
+```toml
+[instrument.antennas]
+C1 = "bdot-medium"
+C4 = "PBS-H3"
+
+[instrument.antennas.C2]        # the long form adds the installation
+antenna = "bdot-large"
+delay = 2.5e-9                  # s, cable delay
+axis = [0.0, 0.0, 1.0]
+```
+
+Names come from an antenna catalogue
+(`cetal_scopes.antennas.AntennaCatalog`). The vendor reference probes
+`PBS-H1` ... `PBS-H4` and `PBS-E1` are always in it; bench probes are defined
+in `antennas.toml`, read from beside `--config` (or from `--antennas PATH`):
+
+```toml
+[antenna.bdot-large]
+turns = 1
+radius = 0.01                   # m (or `area` in m^2): gain = N * A
+f_max = 100e6
+
+[antenna.bdot-small]
+sensitivity = 2.0e-5            # V/(T/s), measured
+f_max = 500e6
+
+[antenna.bdot-spare]            # no calibration yet: recorded, not calibrated
+```
+
+The calibration belongs to the probe, so it lives in the catalogue; what lives
+in the inventory is only what changes when the probe moves. An unknown name is
+refused when the inventory is loaded or applied, naming every bad channel. The
+editor shows a dropdown per channel.
+
 ## How a shot works
 
 1. **Connect** opens and configures every enabled instrument.
@@ -276,6 +317,7 @@ rather than interpolates. Full method and measured tables in
 
 ```
 --config PATH        TOML inventory
+--antennas PATH      antenna catalogue (default: antennas.toml beside --config)
 --demo               synthetic instruments instead of hardware
 --instruments N      how many, with --demo (default: 2)
 --channels-each N    channels per synthetic instrument (default: 2)

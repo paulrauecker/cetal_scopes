@@ -14,6 +14,7 @@ const state = {
   inventory: null,
   drivers: [],
   verticalDrivers: {},
+  antennas: [],
   configPath: null,
 };
 
@@ -1034,6 +1035,61 @@ function verticalEditor(item) {
   return { node: host, sync };
 }
 
+/** How a catalogue antenna reads in its dropdown. */
+function antennaLabel(entry) {
+  if (!entry.calibrated) return `${entry.name} (uncalibrated)`;
+  const fmax = entry.f_max >= 1e9 ? `${entry.f_max / 1e9} GHz` : `${entry.f_max / 1e6} MHz`;
+  return `${entry.name} (${entry.gain.toPrecision(3)} ${entry.unit} to ${fmax})`;
+}
+
+/**
+ * The antenna on each channel, picked from the server's catalogue.
+ *
+ * A channel's entry is a bare name or an object that also carries the
+ * installation (delay, axis, position); picking a probe changes only the
+ * name, so that installation survives a swap. Blank means no antenna.
+ */
+function antennaEditor(item) {
+  const host = document.createElement("div");
+  host.className = "instrument-vertical";
+  item.antennas = item.antennas || {};
+  if (!item.channels.length) return host;
+
+  for (const name of item.channels) {
+    const select = document.createElement("select");
+    const current = item.antennas[name];
+    const chosen = typeof current === "string" ? current : current?.antenna || "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "—";
+    select.append(none);
+    const known = new Set();
+    for (const entry of state.antennas) {
+      const option = document.createElement("option");
+      option.value = entry.name;
+      option.textContent = antennaLabel(entry);
+      select.append(option);
+      known.add(entry.name);
+    }
+    if (chosen && !known.has(chosen)) {
+      // Kept visible so Apply reports it rather than silently dropping it.
+      const option = document.createElement("option");
+      option.value = chosen;
+      option.textContent = `${chosen} (not in catalogue)`;
+      select.append(option);
+    }
+    select.value = chosen;
+    select.addEventListener("change", () => {
+      const previous = item.antennas[name];
+      if (!select.value) delete item.antennas[name];
+      else if (previous && typeof previous === "object") previous.antenna = select.value;
+      else item.antennas[name] = select.value;
+    });
+    host.append(field(`${name} antenna`, select, "The probe on this channel"));
+  }
+  return host;
+}
+
 function renderInventory() {
   const host = $("inventory");
   host.innerHTML = "";
@@ -1095,6 +1151,10 @@ function renderInventory() {
         .split(",")
         .map((name) => name.trim())
         .filter(Boolean);
+      // An antenna on a channel no longer acquired is rejected on Apply.
+      for (const name of Object.keys(item.antennas || {})) {
+        if (!item.channels.includes(name)) delete item.antennas[name];
+      }
     });
     head.append(field("channels", channels, "Comma separated, e.g. C1, C2"));
 
@@ -1180,6 +1240,7 @@ function renderInventory() {
       if (rangeInput) rangeInput.value = "";
     });
     card.append(vertical.node);
+    card.append(antennaEditor(item));
 
     const extras = document.createElement("div");
     extras.className = "instrument-extras";
@@ -1236,6 +1297,7 @@ async function loadInventory() {
   state.inventory = payload.inventory;
   state.drivers = payload.drivers;
   state.verticalDrivers = payload.vertical_drivers || {};
+  state.antennas = payload.antennas || [];
   state.configPath = payload.config_path;
   renderInventory();
 }
@@ -1298,6 +1360,7 @@ function wireInventory() {
       required: true,
       enabled: true,
       options: {},
+      antennas: {},
     });
     renderInventory();
   });

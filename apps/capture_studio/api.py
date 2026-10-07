@@ -30,6 +30,7 @@ from processing import ProcessingGroup, ProcessingStep, step_catalog
 from pydantic import BaseModel, ConfigDict, Field
 from session import StudioSession, summarize_shot
 
+from cetal_scopes.antenna import Antenna
 from cetal_scopes.scopes.registry import DRIVERS
 
 __all__ = ["create_app", "normalise_root_path", "with_root_path"]
@@ -84,6 +85,23 @@ class ForceRequest(_Body):
     """Which instruments to force."""
 
     labels: list[str] | None = None
+
+
+def _antenna_summary(name: str, antenna: Antenna) -> dict[str, Any]:
+    """One catalogue entry, as the inventory editor lists it."""
+    transfer = antenna.transfer_function
+    summary: dict[str, Any] = {"name": name, "kind": antenna.kind, "calibrated": False}
+    if transfer is not None:
+        gains = abs(transfer.gain_at([transfer.f_min, transfer.f_max]))
+        summary.update(
+            calibrated=True,
+            unit=transfer.unit,
+            f_max=transfer.f_max,
+            # Only meaningful for a flat calibration, which every catalogue
+            # entry currently is; a measured curve would show its range.
+            gain=float(gains.max()),
+        )
+    return summary
 
 
 def _error(exc: Exception, status: int = 400) -> HTTPException:
@@ -147,6 +165,11 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
             "drivers": sorted(DRIVERS),
             # Which drivers can be given a panel V/div, and what they snap to.
             "vertical_drivers": VERTICAL_DRIVERS,
+            # What a channel's antenna can be set to.
+            "antennas": [
+                _antenna_summary(name, antenna)
+                for name, antenna in session.antennas.items()
+            ],
             "config_path": str(session.config_path) if session.config_path else None,
         }
 

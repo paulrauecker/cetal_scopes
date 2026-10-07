@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
+from cetal_scopes.antenna import Antenna
 from cetal_scopes.capture import Capture
 from cetal_scopes.scopes.base import Scope
 
@@ -46,6 +47,11 @@ class InstrumentSpec:
         an offset to it. Any capture obtained this way is marked
         ``metadata["untriggered"] = True`` and the instrument is still reported
         as ``"timeout"``, never ``"ok"``.
+    antennas : mapping of str to Antenna, optional
+        The sensor on each channel, by channel name. Attached to every capture
+        this instrument returns, so a saved shot records which probe took
+        which trace. Channels a capture does not contain are skipped, which
+        lets one mapping serve an instrument acquiring a subset of them.
     """
 
     label: str
@@ -55,12 +61,22 @@ class InstrumentSpec:
     direct_trigger: bool = False
     required: bool = True
     fetch_on_timeout: bool = False
+    antennas: Mapping[str, Antenna] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.label:
             raise ValueError("label must be non-empty")
         if self.timeout is not None and self.timeout <= 0:
             raise ValueError(f"timeout must be positive, got {self.timeout!r}")
+
+    def annotate(self, capture: Capture) -> Capture:
+        """``capture`` with this instrument's antennas on the channels it has."""
+        present = {
+            name: antenna
+            for name, antenna in self.antennas.items()
+            if name in capture.channels
+        }
+        return capture.with_antennas(present) if present else capture
 
 
 class AsyncScope:

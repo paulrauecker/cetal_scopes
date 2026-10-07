@@ -20,7 +20,12 @@ from api import create_app, normalise_root_path, with_root_path
 from config import demo_inventory, load_inventory
 from session import StudioSession
 
-__all__ = ["build_parser", "main"]
+from cetal_scopes.antennas import AntennaCatalog, load_antenna_catalog
+
+__all__ = ["ANTENNAS_FILE", "build_parser", "main"]
+
+#: Looked for beside the inventory when ``--antennas`` is not given.
+ANTENNAS_FILE = "antennas.toml"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +40,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         help="TOML inventory describing the instruments on the bench.",
+    )
+    parser.add_argument(
+        "--antennas",
+        type=Path,
+        help=(
+            "TOML antenna catalogue the inventory's channel antennas name. "
+            f"Default: {ANTENNAS_FILE} beside --config, if there is one. The "
+            "built-in reference probes (PBS-H1 ... PBS-E1) are always available."
+        ),
     )
     parser.add_argument(
         "--demo",
@@ -112,17 +126,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         config_path = None
 
-    session = StudioSession(
-        inventory,
-        config_path=config_path,
-        echo=not args.quiet,
-        verbose=args.verbose,
-    )
+    antennas_path = args.antennas
+    if antennas_path is None and config_path is not None:
+        beside = config_path.parent / ANTENNAS_FILE
+        antennas_path = beside if beside.is_file() else None
+    try:
+        antennas = (
+            AntennaCatalog()
+            if antennas_path is None
+            else load_antenna_catalog(antennas_path)
+        )
+        session = StudioSession(
+            inventory,
+            config_path=config_path,
+            echo=not args.quiet,
+            verbose=args.verbose,
+            antennas=antennas,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"cannot load antennas: {exc}")
+        return 2
     root_path = normalise_root_path(args.root_path)
     app = with_root_path(create_app(session, root_path), root_path)
 
     print(f"capture studio on http://{args.host}:{args.port}{root_path}/")
     print(f"instruments: {', '.join(item.label for item in inventory.enabled)}")
+    print(f"antennas: {antennas_path or 'built-in only'}")
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return 0
 

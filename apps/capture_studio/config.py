@@ -13,14 +13,17 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cetal_scopes.acquisition import InstrumentSpec
+from cetal_scopes.antenna import Antenna
+from cetal_scopes.antennas import AntennaCatalog
 from cetal_scopes.scopes.registry import DRIVERS, create_scope, driver_class
 from cetal_scopes.scopes.siglent import VDIV_LADDER
 
 __all__ = [
     "VERTICAL_DRIVERS",
+    "ChannelAntenna",
     "InstrumentConfig",
     "Inventory",
     "build_specs",
@@ -46,6 +49,30 @@ VERTICAL_DRIVERS: dict[str, dict[str, Any]] = {
 
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ChannelAntenna(_Model):
+    """Which catalogue antenna sits on a channel, and how it is installed.
+
+    The probe's calibration lives in the catalogue; what lives here is what
+    changes when the same probe is moved -- its cable delay and placement.
+    A bare antenna name in the file is shorthand for this with only
+    :attr:`antenna` set.
+
+    Attributes
+    ----------
+    antenna : str
+        A name in the :class:`~cetal_scopes.antennas.AntennaCatalog`.
+    delay : float, optional
+        Cable delay in seconds.
+    axis, position : list of float, optional
+        Orientation and position in the lab frame.
+    """
+
+    antenna: str
+    delay: float | None = None
+    axis: list[float] | None = None
+    position: list[float] | None = None
 
 
 class InstrumentConfig(_Model):
@@ -77,6 +104,10 @@ class InstrumentConfig(_Model):
         Set ``False`` to keep an instrument in the file but out of the run.
     options : dict, optional
         Extra keyword arguments for the driver's constructor.
+    antennas : dict, optional
+        The sensor on each channel: an antenna name, or a
+        :class:`ChannelAntenna` with its installation too. Every key must be
+        one of :attr:`channels`.
     """
 
     label: str
@@ -89,6 +120,7 @@ class InstrumentConfig(_Model):
     required: bool = True
     enabled: bool = True
     options: dict[str, Any] = Field(default_factory=dict)
+    antennas: dict[str, str | ChannelAntenna] = Field(default_factory=dict)
 
     @field_validator("label")
     @classmethod
@@ -113,6 +145,41 @@ class InstrumentConfig(_Model):
         if value is not None and value <= 0:
             raise ValueError(f"timeout must be positive, got {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _antennas_are_on_acquired_channels(self) -> InstrumentConfig:
+        stray = sorted(set(self.antennas) - set(self.channels))
+        if stray:
+            raise ValueError(
+                f"{self.label}: antennas given for channels not in 'channels': {stray}"
+            )
+        return self
+
+    def resolved_antennas(self, catalog: AntennaCatalog) -> dict[str, Antenna]:
+        """Each channel's antenna, looked up in ``catalog`` and placed.
+
+        Raises
+        ------
+        ValueError
+            If a name is not in the catalogue; every such channel is named.
+        """
+        resolved: dict[str, Antenna] = {}
+        problems: list[str] = []
+        for channel, entry in self.antennas.items():
+            if isinstance(entry, str):
+                entry = ChannelAntenna(antenna=entry)
+            try:
+                resolved[channel] = catalog.resolve(
+                    entry.antenna,
+                    axis=entry.axis,
+                    position=entry.position,
+                    delay=entry.delay,
+                )
+            except ValueError as exc:
+                problems.append(f"{self.label} {channel}: {exc}")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return resolved
 
     def resolved_settings(self) -> dict[str, Any]:
         """The settings as the driver will see them, ceilings filled in.
@@ -208,8 +275,13 @@ class InstrumentConfig(_Model):
             )
         return settings
 
-    def build(self) -> InstrumentSpec:
-        """Instantiate the driver and wrap it in an :class:`InstrumentSpec`."""
+    def build(self, catalog: AntennaCatalog | None = None) -> InstrumentSpec:
+        """Instantiate the driver and wrap it in an :class:`InstrumentSpec`.
+
+        ``catalog`` resolves :attr:`antennas`; the default holds only the
+        built-in reference probes.
+        """
+        antennas = self.resolved_antennas(catalog or AntennaCatalog())
         kwargs: dict[str, Any] = dict(self.options)
         if self.channels:
             kwargs["channels"] = tuple(self.channels)
@@ -225,6 +297,7 @@ class InstrumentConfig(_Model):
             timeout=self.timeout,
             direct_trigger=self.direct_trigger,
             required=self.required,
+            antennas=antennas,
         )
 
 
@@ -307,6 +380,26 @@ class Inventory(_Model):
         """The instruments that will take part in a shot."""
         return [item for item in self.instruments if item.enabled]
 
+    def check_antennas(self, catalog: AntennaCatalog) -> None:
+        """Fail now, naming every bad antenna, rather than at connect time.
+
+        Disabled instruments are checked too: a typo should not wait for the
+        day the instrument is switched back on.
+
+        Raises
+        ------
+        ValueError
+            If any channel names an antenna that is not in ``catalog``.
+        """
+        problems: list[str] = []
+        for item in self.instruments:
+            try:
+                item.resolved_antennas(catalog)
+            except ValueError as exc:
+                problems.append(str(exc))
+        if problems:
+            raise ValueError("; ".join(problems))
+
 
 def load_inventory(path: str | Path) -> Inventory:
     """Read an inventory from a TOML file.
@@ -342,8 +435,10 @@ def parse_inventory(raw: Mapping[str, Any]) -> Inventory:
     return Inventory.model_validate(data)
 
 
-def build_specs(inventory: Inventory) -> list[InstrumentSpec]:
-    """Instantiate every enabled instrument.
+def build_specs(
+    inventory: Inventory, catalog: AntennaCatalog | None = None
+) -> list[InstrumentSpec]:
+    """Instantiate every enabled instrument, its antennas from ``catalog``.
 
     Raises
     ------
@@ -353,7 +448,7 @@ def build_specs(inventory: Inventory) -> list[InstrumentSpec]:
     enabled = inventory.enabled
     if not enabled:
         raise ValueError("no instruments are enabled")
-    return [item.build() for item in enabled]
+    return [item.build(catalog) for item in enabled]
 
 
 def demo_inventory(n_instruments: int = 2, *, channels_each: int = 2) -> Inventory:
@@ -430,6 +525,17 @@ def dumps_toml(inventory: Inventory) -> str:
             lines.append("enabled = false")
         lines.extend(_table(f"instrument.{'options'}", item.options))
         lines.extend(_table("instrument.settings", item.settings))
+        lines.extend(
+            _table(
+                "instrument.antennas",
+                {
+                    channel: entry
+                    if isinstance(entry, str)
+                    else entry.model_dump(exclude_none=True)
+                    for channel, entry in item.antennas.items()
+                },
+            )
+        )
     return "\n".join(lines) + "\n"
 
 

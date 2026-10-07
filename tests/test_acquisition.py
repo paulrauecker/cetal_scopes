@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from cetal_scopes import Capture, Scope
+from cetal_scopes import Antenna, Capture, Scope
 from cetal_scopes.acquisition import (
     AcquisitionEvent,
     InstrumentSpec,
@@ -308,6 +308,28 @@ def test_segmented_instruments_get_one_shot_entry_per_segment() -> None:
 
     result = run(main())
     assert sorted(result.shot) == ["m5i[0]", "m5i[1]", "m5i[2]"]
+
+
+def test_antennas_are_attached_to_every_fetched_capture() -> None:
+    journal: list[str] = []
+    probe = Antenna(name="bdot-medium", kind="b-dot")
+    specs = [
+        InstrumentSpec(
+            label="m5i",
+            scope=StagedFakeScope("m5i", journal, n_captures=2),
+            direct_trigger=True,
+            # CH2 is not acquired; a mapping may name more than a capture has.
+            antennas={"CH1": probe, "CH2": Antenna(name="unused")},
+        )
+    ]
+
+    async def main() -> Any:
+        async with MultiScopeAcquisition(specs, poll_interval=0.01) as run_:
+            return await run_.run_shot(direct_trigger=True)
+
+    result = run(main())
+    for key in ("m5i[0]", "m5i[1]"):
+        assert result.shot[key]["CH1"].antenna is probe
 
 
 # ---------------------------------------------------------------------------
