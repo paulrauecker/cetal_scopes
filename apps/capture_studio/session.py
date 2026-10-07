@@ -17,7 +17,15 @@ from typing import Any
 
 import numpy as np
 from config import Inventory, build_specs, save_inventory
-from processing import ProcessingStep, apply_pipeline, pipeline_to_metadata
+from processing import (
+    ProcessingGroup,
+    ProcessingStep,
+    apply_pipeline,
+    group_of,
+    groups_to_metadata,
+    pipeline_to_metadata,
+    validate_groups,
+)
 
 from cetal_scopes.acquisition import (
     AcquisitionEvent,
@@ -259,6 +267,7 @@ class StudioSession:
         self._shot: Shot | None = None
         self._offsets_fit: dict[str, TimeOffset] = {}
         self._pipeline: list[ProcessingStep] = []
+        self._groups: list[ProcessingGroup] = []
         self._processed: tuple[Any, dict[str, Channel], list[str]] | None = None
         self._log: list[dict[str, Any]] = []
         self._events: list[AcquisitionEvent] = []
@@ -503,18 +512,49 @@ class StudioSession:
 
     @property
     def pipeline(self) -> list[ProcessingStep]:
-        """The current processing pipeline."""
+        """The default pipeline, for channels in no group."""
         return list(self._pipeline)
 
     def set_pipeline(self, steps: Sequence[ProcessingStep]) -> None:
-        """Replace the processing pipeline."""
+        """Replace the default pipeline."""
         self._pipeline = list(steps)
         self._processed = None
         names = [step.name for step in self._pipeline if step.enabled]
         self._log_line(f"pipeline: {names or 'none'}")
 
+    @property
+    def groups(self) -> list[ProcessingGroup]:
+        """The processing groups, each with its own channels and pipeline."""
+        return list(self._groups)
+
+    def set_groups(self, groups: Sequence[ProcessingGroup]) -> None:
+        """Replace the processing groups.
+
+        A group may name channels the current shot does not have; they are
+        ignored until a shot that has them arrives, so a grouping set up once
+        survives from shot to shot.
+
+        Raises
+        ------
+        ValueError
+            On a blank or repeated group name, or a channel in two groups.
+        """
+        validate_groups(groups)
+        self._groups = [
+            group.model_copy(update={"name": group.name.strip()}) for group in groups
+        ]
+        self._processed = None
+        for group in self._groups:
+            names = [step.name for step in group.steps if step.enabled]
+            self._log_line(
+                f"group {group.name} {list(group.channels)}: {names or 'none'}"
+            )
+
     def processed_channels(self) -> tuple[dict[str, Channel], list[str]]:
-        """Apply the pipeline to every channel of the current shot.
+        """Apply each channel's pipeline to the current shot.
+
+        A channel in a group gets that group's pipeline; any other channel
+        gets the default one.
 
         Returns
         -------
@@ -527,7 +567,7 @@ class StudioSession:
         """
         shot = self.require_shot()
         aligned = shot.aligned_channels()
-        if not self._pipeline:
+        if not self._pipeline and not any(group.steps for group in self._groups):
             return aligned, []
 
         # One screen refresh asks for the traces, the spectrum, a two-channel
@@ -540,11 +580,16 @@ class StudioSession:
         if self._processed is not None and self._processed[0] == token:
             return self._processed[1], self._processed[2]
 
+        owners = group_of(self._groups)
         processed: dict[str, Channel] = {}
         warnings: list[str] = []
         for key, channel in aligned.items():
-            result, notes = apply_pipeline(channel, self._pipeline)
+            group = owners.get(key)
+            steps = group.steps if group is not None else self._pipeline
+            result, notes = apply_pipeline(channel, steps)
             processed[key] = result
+            if group is not None:
+                notes = [f"[{group.name}] {note}" for note in notes]
             warnings.extend(notes)
         self._processed = (token, processed, warnings)
         return processed, warnings
@@ -555,26 +600,49 @@ class StudioSession:
             id(shot),
             tuple(sorted(shot.offsets.items())),
             tuple(step.model_dump_json() for step in self._pipeline),
+            tuple(group.model_dump_json() for group in self._groups),
         )
 
     # -- persistence -------------------------------------------------------
 
     def save_shot_to(self, path: str | Path) -> Path:
-        """Save the current shot, stamping it with the pipeline that made it.
+        """Save the current shot, stamping it with the pipelines that made it.
 
-        Storing the pipeline is what makes the saved shot reproducible: the
-        recorded samples plus the exact steps applied to them.
+        Storing the pipelines is what makes the saved shot reproducible: the
+        recorded samples plus the exact steps applied to each channel.
         """
         shot = self.require_shot()
         shot.metadata["processing"] = pipeline_to_metadata(self._pipeline)
+        shot.metadata["processing_groups"] = groups_to_metadata(self._groups)
         shot.metadata["saved_at"] = datetime.now(UTC).isoformat()
         index = save_shot(shot, path)
         self._log_line(f"shot saved to {index.parent}")
         return index
 
     def load_shot_from(self, path: str | Path) -> Shot:
-        """Load a saved shot and make it the current one."""
+        """Load a saved shot and make it the current one.
+
+        The pipelines the shot was saved with replace the session's, since
+        they are half of what the saved shot *is*. A shot saved without them
+        (not by the studio) leaves the session's processing alone.
+
+        Raises
+        ------
+        ValueError
+            If the stored processing does not parse.
+        """
         shot = load_shot(path)
+        if "processing" in shot.metadata:
+            steps = [
+                ProcessingStep.model_validate(item)
+                for item in shot.metadata["processing"]
+            ]
+            groups = [
+                ProcessingGroup.model_validate(item)
+                for item in shot.metadata.get("processing_groups", [])
+            ]
+            self.set_groups(groups)
+            self.set_pipeline(steps)
         self._shot = shot
         self._result = None
         self._offsets_fit = {}

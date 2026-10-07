@@ -122,6 +122,13 @@ td.state-ok { color: var(--good); }
 td.state-bad { color: var(--bad); }
 
 .pipeline { padding: 8px 12px; display: grid; gap: 6px; }
+.pipeline-block { border-top: 1px solid var(--line); }
+.pipeline-block:first-child { border-top: none; }
+.pipeline-block .block-head { padding: 8px 12px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pipeline-block .block-head .name-input { font-weight: 500; width: 10em; }
+.pipeline-block .channel-list { padding: 6px 12px 0; }
+.channel-list label.elsewhere { color: var(--muted); }
+.channel-list label.absent { text-decoration: line-through; }
 .step { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .step .name { font-weight: 500; min-width: 130px; }
 .step input[type="number"], .step input[type="text"] { width: 90px; }

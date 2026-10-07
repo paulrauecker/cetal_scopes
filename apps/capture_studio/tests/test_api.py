@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pytest
 from api import create_app, normalise_root_path, with_root_path
 from config import demo_inventory
 from fastapi.testclient import TestClient
+from processing import ProcessingGroup, ProcessingStep
 from session import StudioSession
 
 
@@ -340,6 +342,133 @@ def test_a_step_that_cannot_run_is_warned_about_not_fatal(client: TestClient) ->
     assert "b_field skipped" in payload["warnings"][0]
 
 
+LOWPASS = {"name": "lowpass", "params": {"cutoff": 1e6}}
+
+
+def test_each_group_gets_its_own_pipeline(
+    session: StudioSession, client: TestClient
+) -> None:
+    capture(client)
+    # One group spanning both instruments, filtered; everything else raw.
+    response = client.put(
+        "/api/processing",
+        json={
+            "steps": [],
+            "groups": [
+                {
+                    "name": "probes",
+                    "channels": ["demo1:CH1", "demo2:CH2"],
+                    "steps": [LOWPASS],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["groups"][0]["channels"] == ["demo1:CH1", "demo2:CH2"]
+
+    processed, warnings = session.processed_channels()
+    raw = session.require_shot().aligned_channels()
+
+    assert warnings == []
+    for key in ("demo1:CH1", "demo2:CH2"):
+        assert not np.array_equal(processed[key].volts, raw[key].volts)
+    for key in ("demo1:CH2", "demo2:CH1"):
+        assert np.array_equal(processed[key].volts, raw[key].volts)
+
+
+def test_ungrouped_channels_get_the_default_pipeline(
+    session: StudioSession, client: TestClient
+) -> None:
+    capture(client)
+    client.put(
+        "/api/processing",
+        json={
+            "steps": [LOWPASS],
+            "groups": [{"name": "untouched", "channels": ["demo1:CH1"]}],
+        },
+    )
+    processed, _ = session.processed_channels()
+    raw = session.require_shot().aligned_channels()
+
+    assert np.array_equal(processed["demo1:CH1"].volts, raw["demo1:CH1"].volts)
+    assert not np.array_equal(processed["demo2:CH1"].volts, raw["demo2:CH1"].volts)
+
+
+def test_a_group_warning_names_the_group(client: TestClient) -> None:
+    capture(client)
+    client.put(
+        "/api/processing",
+        json={
+            "groups": [
+                {
+                    "name": "bdot",
+                    "channels": ["demo1:CH1"],
+                    "steps": [{"name": "b_field", "params": {}}],
+                }
+            ]
+        },
+    )
+    warnings = client.get("/api/figure?panel=time").json()["warnings"]
+
+    assert len(warnings) == 1
+    assert warnings[0].startswith("[bdot] ")
+
+
+@pytest.mark.parametrize(
+    ("groups", "reason"),
+    [
+        (
+            [
+                {"name": "a", "channels": ["demo1:CH1"]},
+                {"name": "b", "channels": ["demo1:CH1"]},
+            ],
+            "at most one group",
+        ),
+        ([{"name": "a"}, {"name": "a"}], "two processing groups"),
+        ([{"name": "  "}], "needs a name"),
+        ([{"name": "default"}], "ungrouped pipeline"),
+    ],
+)
+def test_an_invalid_grouping_is_rejected_and_changes_nothing(
+    session: StudioSession,
+    client: TestClient,
+    groups: list[dict[str, Any]],
+    reason: str,
+) -> None:
+    client.put(
+        "/api/processing",
+        json={"steps": [LOWPASS], "groups": [{"name": "keep", "channels": ["x:y"]}]},
+    )
+    response = client.put("/api/processing", json={"steps": [], "groups": groups})
+
+    assert response.status_code == 400
+    assert reason in response.json()["detail"]
+    assert [group.name for group in session.groups] == ["keep"]
+    assert [step.name for step in session.pipeline] == ["lowpass"]
+
+
+def test_the_traces_can_be_laid_out_by_group(client: TestClient) -> None:
+    capture(client)
+    client.put(
+        "/api/processing",
+        json={"groups": [{"name": "pair", "channels": ["demo1:CH1", "demo2:CH1"]}]},
+    )
+    figure = client.get("/api/figure?panel=time&layout=per-group").json()["figure"]
+    rows = {trace["name"]: trace["yaxis"] for trace in figure["data"]}
+
+    assert rows["demo1:CH1"] == rows["demo2:CH1"] == "y"
+    assert rows["demo1:CH2"] == rows["demo2:CH2"] == "y2"
+
+
+def test_a_steps_only_update_keeps_the_groups(client: TestClient) -> None:
+    # A client that predates groups must not wipe them.
+    client.put("/api/processing", json={"groups": [{"name": "g", "channels": ["a:b"]}]})
+    payload = client.put("/api/processing", json={"steps": [LOWPASS]}).json()
+
+    assert [group["name"] for group in payload["groups"]] == ["g"]
+    assert client.get("/api/processing").json()["groups"][0]["channels"] == ["a:b"]
+
+
 def test_measurements_are_served(client: TestClient) -> None:
     capture(client)
     payload = client.get("/api/measurements").json()
@@ -363,7 +492,12 @@ def test_a_shot_round_trips_through_disk(client: TestClient, tmp_path: Path) -> 
     capture(client)
     client.put(
         "/api/processing",
-        json={"steps": [{"name": "detrend", "params": {"type": "linear"}}]},
+        json={
+            "steps": [{"name": "detrend", "params": {"type": "linear"}}],
+            "groups": [
+                {"name": "probes", "channels": ["demo1:CH1"], "steps": [LOWPASS]}
+            ],
+        },
     )
     client.post("/api/shot/autofit", json={})
     fitted = client.get("/api/shot").json()["shot"]["captures"]
@@ -378,6 +512,16 @@ def test_a_shot_round_trips_through_disk(client: TestClient, tmp_path: Path) -> 
     assert reloaded == offsets
     # The pipeline travels with the shot, which is what makes it reproducible.
     assert payload["shot"]["metadata"]["processing"][0]["name"] == "detrend"
+    # ...and loading it brings the pipelines back with it.
+    client.put("/api/processing", json={"steps": [], "groups": []})
+    payload = client.post("/api/shot/load", json={"path": str(target)}).json()
+    processing = client.get("/api/processing").json()
+    assert [step["name"] for step in processing["steps"]] == ["detrend"]
+    assert processing["groups"][0]["channels"] == ["demo1:CH1"]
+    groups = payload["shot"]["metadata"]["processing_groups"]
+    assert groups[0]["name"] == "probes"
+    assert groups[0]["channels"] == ["demo1:CH1"]
+    assert groups[0]["steps"][0]["name"] == "lowpass"
 
 
 def test_saving_without_a_shot_is_refused(client: TestClient, tmp_path: Path) -> None:
@@ -588,6 +732,18 @@ def test_processed_channels_are_reused_across_a_refresh(
     [
         ("set_offsets", {"offsets": {"demo2": 5e-9}}),
         ("set_pipeline", {"steps": []}),
+        (
+            "set_groups",
+            {
+                "groups": [
+                    ProcessingGroup(
+                        name="g",
+                        channels=["demo1:CH1"],
+                        steps=[ProcessingStep(name="detrend")],
+                    )
+                ]
+            },
+        ),
     ],
 )
 def test_the_processed_cache_follows_what_it_depends_on(

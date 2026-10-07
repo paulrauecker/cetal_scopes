@@ -169,8 +169,9 @@ differently.
 
 - **Instruments** — the inventory editor described above: what each instrument
   is told before a shot.
-- **Traces** — three layouts: everything overlaid, one row per capture, or one
-  row per channel. Stacked rows share the x-axis, so zoom moves them together.
+- **Traces** — four layouts: everything overlaid, one row per capture, one
+  row per channel, or one row per processing group (channels in no group share
+  a last `default` row). Stacked rows share the x-axis, so zoom moves them together.
   Long records are drawn through a min/max envelope, so a one-sample spike
   survives decimation instead of being aliased away.
   **Zooming re-fetches.** The visible span is sent back to the server and the
@@ -211,10 +212,24 @@ differently.
   Levels come from the waveform's histogram modes rather than min/max, so
   ringing does not read as a shorter rise time. A measurement the waveform does
   not support shows as `—`, never as a fabricated number.
-- **Processing** — an ordered pipeline of `cetal_scopes.analysis` steps applied
-  before display. A step that cannot run on a given channel (`b_field` without
-  an antenna, say) is skipped and reported rather than failing the view, so one
-  pipeline can serve a whole shot. **raw** bypasses it.
+- **Processing** — ordered pipelines of `cetal_scopes.analysis` steps applied
+  before display; **↑ / ↓** reorder a step. A step that cannot run on a given
+  channel (`b_field` without an antenna, say) is skipped and reported rather
+  than failing the view, so one pipeline can serve a whole shot. **raw**
+  bypasses all of them.
+  **Add group** makes a named set of channels with a pipeline of its own --
+  tick channels from any instruments, so the Siglent's and the M5i's B-dot
+  channels can share a calibration chain while the rest get something else.
+  A channel is in at most one group (ticking it in another moves it there),
+  since two pipelines would give it two processed versions. Channels in no
+  group get the **default** pipeline, so with no groups nothing changes.
+  Groups are keyed `label:channel` and outlive the shot, so a grouping set up
+  once applies to every shot that follows; channels can be picked from the
+  inventory before the first shot. A step skipped inside a group is reported
+  as `[group] ...`. `default` is reserved for the ungrouped pipeline.
+  Processing never touches the recorded samples: every step returns a new
+  channel, and a test runs each catalogue step and checks its input is
+  unchanged, so **raw** is always the data as captured.
 
 ## Export
 
@@ -232,10 +247,13 @@ nothing.
 
 **Save** writes a shot directory: one capture per instrument in the ordinary
 `<label>.json` + `.npy` format, plus `shot.json` holding the labels, offsets,
-reference, the per-instrument diagnostics, and the processing pipeline. The
-pipeline travels with the shot, which is what makes it reproducible: the
+reference, the per-instrument diagnostics, and the processing pipelines (the
+default under `processing`, the groups under `processing_groups`). The
+pipelines travel with the shot, which is what makes it reproducible: the
 recorded samples plus the exact steps applied to them. **Load** restores all of
-it.
+it, pipelines and groups included -- replacing whatever was set up in the
+session, since they are half of what the saved shot is. Only enabled steps are
+saved, so a step that was switched off does not come back.
 
 ## Bench probes
 

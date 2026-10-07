@@ -10,6 +10,7 @@ const state = {
   status: {},
   catalog: [],
   pipeline: [],
+  groups: [],
   inventory: null,
   drivers: [],
   verticalDrivers: {},
@@ -231,10 +232,16 @@ function renderInstruments() {
 
 // ---------------------------------------------------------------------------
 // Processing
+//
+// A default pipeline plus any number of groups, each a named set of channels
+// (from any instruments) with a pipeline of its own. A channel is in at most
+// one group; a channel in none gets the default pipeline.
 
-function renderCatalog() {
-  const select = $("step-name");
-  select.innerHTML = "";
+function stepPicker(steps) {
+  const wrap = document.createElement("span");
+  wrap.style.display = "contents";
+
+  const select = document.createElement("select");
   for (const info of state.catalog) {
     const option = document.createElement("option");
     option.value = info.name;
@@ -242,19 +249,30 @@ function renderCatalog() {
     option.title = info.summary;
     select.append(option);
   }
-  select.addEventListener("change", showSummary);
-  showSummary();
+  const summary = document.createElement("span");
+  summary.className = "note";
+  const show = () => {
+    const info = state.catalog.find((item) => item.name === select.value);
+    summary.textContent = info ? info.summary : "";
+  };
+  select.addEventListener("change", show);
+  show();
+
+  const add = document.createElement("button");
+  add.textContent = "Add step";
+  add.addEventListener("click", () => {
+    steps.push({ name: select.value, params: {}, enabled: true });
+    saveProcessing();
+  });
+
+  wrap.append(select, add, summary);
+  return wrap;
 }
 
-function showSummary() {
-  const info = state.catalog.find((item) => item.name === $("step-name").value);
-  $("step-summary").textContent = info ? info.summary : "";
-}
-
-function renderPipeline() {
-  const host = $("pipeline");
-  host.innerHTML = "";
-  state.pipeline.forEach((step, index) => {
+function renderSteps(steps) {
+  const host = document.createElement("div");
+  host.className = "pipeline";
+  steps.forEach((step, index) => {
     const info = state.catalog.find((item) => item.name === step.name);
     const row = document.createElement("div");
     row.className = "step";
@@ -265,7 +283,7 @@ function renderPipeline() {
     toggle.title = "Enable this step";
     toggle.addEventListener("change", () => {
       step.enabled = toggle.checked;
-      savePipeline();
+      saveProcessing();
     });
     row.append(toggle);
 
@@ -293,30 +311,192 @@ function renderPipeline() {
         const raw = input.value.trim();
         if (raw === "") delete step.params[key];
         else step.params[key] = input.type === "number" ? Number(raw) : raw;
-        savePipeline();
+        saveProcessing();
       });
       label.append(input);
       row.append(label);
+    }
+
+    // Order is the pipeline: filtering before or after a baseline subtraction
+    // is a different result.
+    for (const [text, shift, hint] of [
+      ["↑", -1, "Run this step earlier"],
+      ["↓", 1, "Run this step later"],
+    ]) {
+      const move = document.createElement("button");
+      move.className = "small";
+      move.textContent = text;
+      move.title = hint;
+      move.disabled = index + shift < 0 || index + shift >= steps.length;
+      move.addEventListener("click", () => {
+        const [moved] = steps.splice(index, 1);
+        steps.splice(index + shift, 0, moved);
+        saveProcessing();
+      });
+      row.append(move);
     }
 
     const remove = document.createElement("button");
     remove.className = "small";
     remove.textContent = "remove";
     remove.addEventListener("click", () => {
-      state.pipeline.splice(index, 1);
-      savePipeline();
+      steps.splice(index, 1);
+      saveProcessing();
     });
     row.append(remove);
 
     host.append(row);
   });
+  return host;
 }
 
-async function savePipeline() {
-  const payload = await put("api/processing", { steps: state.pipeline });
-  state.pipeline = payload.steps;
-  renderPipeline();
+/**
+ * Every channel a group could hold: the shot's, then the enabled instruments'
+ * from the inventory, so groups can be set up before the first shot.
+ */
+function groupableKeys() {
+  const keys = [...channelKeys()];
+  for (const item of state.inventory?.instruments ?? []) {
+    if (!item.enabled) continue;
+    for (const name of item.channels || []) {
+      const key = `${item.label}:${name}`;
+      if (!keys.includes(key)) keys.push(key);
+    }
+  }
+  return keys;
+}
+
+function groupMembership(group) {
+  const host = document.createElement("div");
+  host.className = "channel-list";
+  const inShot = new Set(channelKeys());
+  const keys = groupableKeys();
+  // Members the shot and the inventory no longer have stay listed, so they
+  // can be seen and removed rather than lingering invisibly.
+  for (const key of group.channels) if (!keys.includes(key)) keys.push(key);
+  if (!keys.length) {
+    host.textContent = "no channels yet — add instruments or capture a shot";
+    host.classList.add("note");
+    return host;
+  }
+
+  let previous = null;
+  for (const key of keys) {
+    const capture = key.split(":")[0];
+    if (capture !== previous) {
+      const name = document.createElement("span");
+      name.className = "capture-name";
+      name.textContent = capture;
+      host.append(name);
+      previous = capture;
+    }
+
+    const owner = state.groups.find((other) => other.channels.includes(key));
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = owner === group;
+    box.addEventListener("change", () => {
+      // One group per channel: joining this one leaves any other.
+      for (const other of state.groups) {
+        other.channels = other.channels.filter((item) => item !== key);
+      }
+      if (box.checked) group.channels.push(key);
+      saveProcessing();
+    });
+
+    const label = document.createElement("label");
+    label.append(box, key.split(":").slice(1).join(":") || key);
+    label.title = key;
+    if (owner && owner !== group) {
+      label.classList.add("elsewhere");
+      label.title = `${key} — in ${owner.name}; ticking moves it here`;
+    }
+    if (!inShot.has(key) && state.shot) {
+      label.classList.add("absent");
+      label.title = `${key} — not in the current shot`;
+    }
+    host.append(label);
+  }
+  return host;
+}
+
+function renderProcessing() {
+  const host = $("pipelines");
+  host.innerHTML = "";
+
+  const grouped = new Set(state.groups.flatMap((group) => group.channels));
+  const ungrouped = groupableKeys().filter((key) => !grouped.has(key));
+
+  const base = document.createElement("div");
+  base.className = "pipeline-block";
+  const baseHead = document.createElement("div");
+  baseHead.className = "block-head";
+  const title = document.createElement("strong");
+  title.textContent = "default";
+  title.title = "Applied to every channel that is in no group";
+  baseHead.append(title, stepPicker(state.pipeline));
+  const covers = document.createElement("div");
+  covers.className = "note";
+  covers.style.padding = "4px 12px 0";
+  covers.textContent = state.groups.length
+    ? `applies to: ${ungrouped.join(", ") || "nothing — every channel is grouped"}`
+    : "applies to every channel";
+  base.append(baseHead, covers, renderSteps(state.pipeline));
+  host.append(base);
+
+  state.groups.forEach((group, index) => {
+    const block = document.createElement("div");
+    block.className = "pipeline-block";
+    const head = document.createElement("div");
+    head.className = "block-head";
+
+    const name = textInput(group.name);
+    name.className = "name-input";
+    name.title = "Group name";
+    name.addEventListener("change", () => {
+      group.name = name.value.trim();
+      saveProcessing();
+    });
+
+    const remove = document.createElement("button");
+    remove.className = "small";
+    remove.textContent = "remove group";
+    remove.title = "Its channels go back to the default pipeline";
+    remove.addEventListener("click", () => {
+      state.groups.splice(index, 1);
+      saveProcessing();
+    });
+
+    head.append(name, stepPicker(group.steps), remove);
+    block.append(head, groupMembership(group), renderSteps(group.steps));
+    host.append(block);
+  });
+}
+
+async function saveProcessing() {
+  try {
+    const payload = await put("api/processing", {
+      steps: state.pipeline,
+      groups: state.groups,
+    });
+    state.pipeline = payload.steps;
+    state.groups = payload.groups;
+  } catch {
+    // Rejected (a duplicate group name, say): the reason is in the status
+    // line; show what the session actually holds rather than the edit.
+    await loadProcessing();
+    return;
+  }
+  renderProcessing();
   await refreshFigures();
+}
+
+async function loadProcessing() {
+  const processing = await api("api/processing");
+  state.catalog = processing.catalog;
+  state.pipeline = processing.steps;
+  state.groups = processing.groups || [];
+  renderProcessing();
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +823,7 @@ function adoptShot(payload) {
   renderOffsets();
   renderInstruments();
   renderShotMeta();
+  renderProcessing(); // group membership lists the shot's channels
 }
 
 // The shot summary is built server-side (session.summarize_shot) from the
@@ -1076,6 +1257,7 @@ function wireInventory() {
     const payload = await put("api/inventory", { inventory });
     state.inventory = payload.inventory;
     renderInventory();
+    renderProcessing(); // the channels a group can hold may have changed
     applyStatus(await api("api/status"));
     $("inv-note").textContent =
       "applied — instruments disconnected; the next capture reconnects them";
@@ -1241,9 +1423,12 @@ function wire() {
     });
   }
 
-  $("step-add").addEventListener("click", () => {
-    state.pipeline.push({ name: $("step-name").value, params: {}, enabled: true });
-    savePipeline();
+  $("group-add").addEventListener("click", () => {
+    const names = new Set(state.groups.map((group) => group.name));
+    let n = state.groups.length + 1;
+    while (names.has(`group${n}`)) n += 1;
+    state.groups.push({ name: `group${n}`, channels: [], steps: [] });
+    saveProcessing();
   });
 
   $("shot-save").addEventListener("click", async () => {
@@ -1256,6 +1441,8 @@ function wire() {
     const path = $("shot-path").value.trim();
     if (!path) return;
     adoptShot(await post("api/shot/load", { path }));
+    // The shot brings the pipelines it was saved with.
+    await loadProcessing();
     await refreshFigures();
     await refreshMeasurements();
   });
@@ -1282,11 +1469,7 @@ async function start() {
 
   await loadInventory();
 
-  const processing = await api("api/processing");
-  state.catalog = processing.catalog;
-  state.pipeline = processing.steps;
-  renderCatalog();
-  renderPipeline();
+  await loadProcessing();
 
   applyStatus(await api("api/status"));
   const shot = await api("api/shot");

@@ -35,11 +35,15 @@ from cetal_scopes.channel import Channel
 
 __all__ = [
     "STEPS",
+    "ProcessingGroup",
     "ProcessingStep",
     "StepInfo",
     "apply_pipeline",
+    "group_of",
+    "groups_to_metadata",
     "pipeline_to_metadata",
     "step_catalog",
+    "validate_groups",
 ]
 
 StepFunction = Callable[..., Channel]
@@ -162,6 +166,57 @@ class ProcessingStep(BaseModel):
             raise ValueError(f"step {self.name!r} rejected {kwargs!r}: {exc}") from exc
 
 
+class ProcessingGroup(BaseModel):
+    """A named set of channels that share their own pipeline.
+
+    Channels are ``"label:channel"`` keys, so one group can span instruments.
+    A channel belongs to at most one group -- otherwise it would have two
+    processed versions and every figure would have to pick one -- and a
+    channel in no group gets the session's default pipeline.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    channels: list[str] = Field(default_factory=list)
+    steps: list[ProcessingStep] = Field(default_factory=list)
+
+
+def validate_groups(groups: Sequence[ProcessingGroup]) -> None:
+    """Check that group names are unique and no channel is in two groups.
+
+    Raises
+    ------
+    ValueError
+        On a blank, repeated or reserved (``"default"``) name, or a channel
+        claimed twice.
+    """
+    names: set[str] = set()
+    owner: dict[str, str] = {}
+    for group in groups:
+        name = group.name.strip()
+        if not name:
+            raise ValueError("a processing group needs a name")
+        if name in names:
+            raise ValueError(f"two processing groups are named {name!r}")
+        if name == "default":
+            # The ungrouped channels' pipeline already goes by that name.
+            raise ValueError('"default" is the ungrouped pipeline; pick another name')
+        names.add(name)
+        for key in group.channels:
+            if key in owner and owner[key] != name:
+                raise ValueError(
+                    f"channel {key!r} is in both {owner[key]!r} and {name!r}; "
+                    "a channel belongs to at most one group"
+                )
+            owner[key] = name
+
+
+def group_of(groups: Sequence[ProcessingGroup]) -> dict[str, ProcessingGroup]:
+    """Map each grouped channel key to its group."""
+    return {key: group for group in groups for key in group.channels}
+
+
 def step_catalog() -> list[StepInfo]:
     """Describe every available step, for the UI to build its menu from."""
     return [
@@ -216,3 +271,17 @@ def apply_pipeline(
 def pipeline_to_metadata(steps: Sequence[ProcessingStep]) -> list[Mapping[str, Any]]:
     """Render the pipeline for storage in a shot's metadata."""
     return [step.model_dump() for step in steps if step.enabled]
+
+
+def groups_to_metadata(
+    groups: Sequence[ProcessingGroup],
+) -> list[Mapping[str, Any]]:
+    """Render the processing groups for storage in a shot's metadata."""
+    return [
+        {
+            "name": group.name,
+            "channels": list(group.channels),
+            "steps": pipeline_to_metadata(group.steps),
+        }
+        for group in groups
+    ]

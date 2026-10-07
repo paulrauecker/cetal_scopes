@@ -84,6 +84,28 @@ def test_per_channel_gives_each_channel_a_row() -> None:
     assert len({trace["yaxis"] for trace in figure["data"]}) == 3
 
 
+def test_per_group_gives_each_processing_group_a_row() -> None:
+    # A group may span instruments; ungrouped channels share a last row.
+    figure = time_figure(
+        make_shot(),
+        layout="per-group",
+        channel_groups={"probes": ["siglent:C1", "m5i:CH0"], "empty": ["x:y"]},
+    )
+    rows = {trace["name"]: trace["yaxis"] for trace in figure["data"]}
+
+    assert figure["layout"]["grid"]["rows"] == 2
+    assert rows["siglent:C1"] == rows["m5i:CH0"] == "y"
+    assert rows["siglent:C2"] == "y2"
+    assert figure["layout"]["yaxis"]["title"]["text"].startswith("probes")
+    assert figure["layout"]["yaxis2"]["title"]["text"].startswith("default")
+
+
+def test_per_group_without_groups_is_one_row() -> None:
+    figure = time_figure(make_shot(), layout="per-group")
+    assert "grid" not in figure["layout"]
+    assert {trace["yaxis"] for trace in figure["data"]} == {"y"}
+
+
 def test_stacked_rows_share_the_x_axis() -> None:
     # Comparing the same instant across instruments is the point of stacking.
     figure = time_figure(make_shot(), layout="per-capture")

@@ -33,6 +33,7 @@
             <option value="overlay">overlay all</option>
             <option value="per-capture">one row per capture</option>
             <option value="per-channel">one row per channel</option>
+            <option value="per-group">one row per processing group</option>
           </select>
         </label>
         <label class="inline"><input type="checkbox" id="raw"> raw (skip processing)</label>
@@ -138,11 +139,10 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Processing</h2>
-        <select id="step-name"></select>
-        <button id="step-add">Add step</button>
-        <span id="step-summary" class="note"></span>
+        <button id="group-add" title="A named set of channels, from any instruments, with its own pipeline">Add group</button>
+        <span class="note">a channel in no group gets the default pipeline</span>
       </div>
-      <div id="pipeline" class="pipeline"></div>
+      <div id="pipelines"></div>
       <div id="pipeline-warnings" class="note"></div>
     </section>
 

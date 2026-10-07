@@ -26,7 +26,7 @@ from figures import (
     vector_figure,
     xy_figure,
 )
-from processing import ProcessingStep, step_catalog
+from processing import ProcessingGroup, ProcessingStep, step_catalog
 from pydantic import BaseModel, ConfigDict, Field
 from session import StudioSession, summarize_shot
 
@@ -65,9 +65,13 @@ class AutofitRequest(_Body):
 
 
 class PipelineRequest(_Body):
-    """The processing pipeline."""
+    """The processing pipelines."""
 
     steps: list[ProcessingStep] = Field(default_factory=list)
+    """The default pipeline, for channels in no group."""
+    groups: list[ProcessingGroup] | None = None
+    """Channel groups with their own pipelines. ``None`` leaves them as they
+    are, so a client that only knows about ``steps`` does not wipe them."""
 
 
 class PathRequest(_Body):
@@ -261,14 +265,21 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
     @app.get("/api/processing")
     def get_processing() -> dict[str, Any]:
         return {
-            "steps": [step.model_dump() for step in session.pipeline],
+            **_processing_payload(session),
             "catalog": [info.model_dump() for info in step_catalog()],
         }
 
     @app.put("/api/processing")
     def put_processing(payload: PipelineRequest) -> dict[str, Any]:
+        # Groups first: a rejected grouping must not leave the default
+        # pipeline changed behind it.
+        if payload.groups is not None:
+            try:
+                session.set_groups(payload.groups)
+            except ValueError as exc:
+                raise _error(exc) from exc
         session.set_pipeline(payload.steps)
-        return {"steps": [step.model_dump() for step in session.pipeline]}
+        return _processing_payload(session)
 
     @app.get("/api/figure")
     def get_figure(
@@ -330,6 +341,7 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
                 t_min=t_min,
                 t_max=t_max,
                 revision=session.status.shot_id,
+                channel_groups={group.name: group.channels for group in session.groups},
                 window=window,
                 max_points=max_points,
                 frequency=frequency,
@@ -441,6 +453,7 @@ def _build_figure(
     t_max: float | None = None,
     revision: str | None = None,
     frequency: float | None = None,
+    channel_groups: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     if panel == "time":
         return time_figure(
@@ -452,6 +465,7 @@ def _build_figure(
             t_min=t_min,
             t_max=t_max,
             revision=revision,
+            channel_groups=channel_groups,
         )
     if panel == "fft":
         return fft_figure(
@@ -487,6 +501,13 @@ def _build_figure(
     if panel == "coherence":
         return coherence_figure(shot, a, b, processed=processed, max_points=max_points)
     return transfer_figure(shot, a, b, processed=processed, max_points=max_points)
+
+
+def _processing_payload(session: StudioSession) -> dict[str, Any]:
+    return {
+        "steps": [step.model_dump() for step in session.pipeline],
+        "groups": [group.model_dump() for group in session.groups],
+    }
 
 
 def _status_payload(session: StudioSession) -> dict[str, Any]:

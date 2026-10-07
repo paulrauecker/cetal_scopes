@@ -11,7 +11,7 @@ moves its traces.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from itertools import pairwise
 from typing import Any, Literal
 
@@ -45,9 +45,18 @@ __all__ = [
     "xy_figure",
 ]
 
-LayoutMode = Literal["per-channel", "per-capture", "overlay"]
+LayoutMode = Literal["per-channel", "per-capture", "per-group", "overlay"]
 
-LAYOUTS: tuple[LayoutMode, ...] = ("per-channel", "per-capture", "overlay")
+LAYOUTS: tuple[LayoutMode, ...] = (
+    "per-channel",
+    "per-capture",
+    "per-group",
+    "overlay",
+)
+
+#: The row that collects channels in no processing group, named after the
+#: pipeline they get.
+UNGROUPED_ROW = "default"
 """The three ways to arrange the time-domain traces."""
 
 #: A qualitative palette that stays distinguishable in both light and dark
@@ -216,17 +225,19 @@ def time_figure(
     t_min: float | None = None,
     t_max: float | None = None,
     revision: str | None = None,
+    channel_groups: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
-    """Draw the time-domain traces in one of the three layouts.
+    """Draw the time-domain traces in one of the layouts.
 
     Parameters
     ----------
     shot : Shot
         The shot to draw. Channels are keyed ``"label:channel"``.
-    layout : {"per-channel", "per-capture", "overlay"}
+    layout : {"per-channel", "per-capture", "per-group", "overlay"}
         ``per-channel`` gives every channel its own row, ``per-capture`` groups
-        each instrument's channels on one row, and ``overlay`` puts everything
-        on one axes.
+        each instrument's channels on one row, ``per-group`` gives each
+        processing group a row (channels in none share a last ``default``
+        row), and ``overlay`` puts everything on one axes.
     channels : sequence of str, optional
         Keys to draw. Defaults to all of them.
     processed : dict, optional
@@ -246,6 +257,8 @@ def time_figure(
         lets a zoom re-fetch its own window without the view jumping -- and
         resets the view when it changes, so a new shot is not shown through
         the last one's window.
+    channel_groups : mapping of str to sequence of str, optional
+        Group name to channel keys, in row order, for ``per-group``.
 
     Returns
     -------
@@ -271,6 +284,8 @@ def time_figure(
         for key, label, channel in resolved:
             ordered.setdefault(label, []).append((key, label, channel))
         groups = list(ordered.items())
+    elif layout == "per-group":
+        groups = _group_rows(resolved, channel_groups or {})
     else:
         groups = [("", resolved)]
 
@@ -354,6 +369,20 @@ def time_figure(
         "decimated": drawn < in_window,
     }
     return {"data": data, "layout": figure_layout}
+
+
+def _group_rows(
+    resolved: Sequence[tuple[str, str, Channel]],
+    channel_groups: Mapping[str, Sequence[str]],
+) -> list[tuple[str, list[tuple[str, str, Channel]]]]:
+    """One row per group that has a channel to draw, then the ungrouped ones."""
+    rows: dict[str, list[tuple[str, str, Channel]]] = {
+        name: [] for name in channel_groups
+    }
+    owner = {key: name for name, keys in channel_groups.items() for key in keys}
+    for item in resolved:
+        rows.setdefault(owner.get(item[0], UNGROUPED_ROW), []).append(item)
+    return [(name, members) for name, members in rows.items() if members]
 
 
 def _row_title(group_name: str, members: Sequence[tuple[str, str, Channel]]) -> str:
