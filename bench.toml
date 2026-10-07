@@ -5,12 +5,12 @@ poll_interval = 0.2        # how finely the trigger wait is sliced (abort latenc
 default_timeout = 10.0
 arm_timeout = 5.0
 
-# --- Siglent SDS6204L, 192.168.5.171 ---------------------------------------
+# --- Siglent SDS6204L, 192.168.5.126 ---------------------------------------
 
 [[instrument]]
 label = "siglent"
 driver = "siglent_sds6204l"
-address = "192.168.5.171"
+address = "192.168.5.126"
 channels = ["C1", "C2", "C3", "C4"]
 timeout = 10.0
 
@@ -50,6 +50,14 @@ source = "C1"              # or "EX" / "EX5" for the external input
 level = 0.001              # clamps to about +/-4.5 * V/div of the source
 slope = "RISing"
 
+# Probes come from antennas.toml beside this file (PBS-* are built in).
+# The custom B-dots are uncalibrated for now -- see the note there.
+[instrument.antennas]
+C1 = "bdot-medium-a"
+C2 = "bdot-large"
+C3 = "bdot-small"
+C4 = "PBS-H3"              # Aaronia 25 mm, vendor calibration; needs 50 ohm
+
 # --- Spectrum M5i.3367 over PCIe -------------------------------------------
 
 [[instrument]]
@@ -81,3 +89,7 @@ source = "EXT"             # the card's Ext0 "Trig In"; or "CH0" / "CH1"
 # can never fire; connecting then refuses it.
 level = 0.0015
 slope = "RISing"
+
+[instrument.antennas]
+CH0 = "bdot-medium-b"
+CH1 = "bdot-medium-c"

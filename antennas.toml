@@ -1,0 +1,41 @@
+# The bench's own probes. Capture studio reads this from beside bench.toml;
+# bench.toml names one per channel under [instrument.antennas].
+# The Aaronia reference probes (PBS-H1 ... PBS-H4, PBS-E1) are built in and
+# need no entry here.
+#
+# PRELIMINARY: none of these is calibrated yet. The gain is the ideal
+# single-turn loop, N * A = pi * (d/2)^2 in V/(T/s), with no phase. f_max is a
+# placeholder, not a measured bandwidth: it is Nyquist at the 5 GS/s both
+# instruments run at, so b_field never refuses a trace for energy outside the
+# band. Replace both with Helmholtz-coil numbers (`sensitivity`, and the real
+# `f_max`) once measured.
+
+[antenna.bdot-small]
+turns = 1
+radius = 0.0075            # 15 mm diameter
+f_max = 2.5e9
+notes = "uncalibrated: geometric gain, placeholder f_max"
+
+[antenna.bdot-medium-a]
+turns = 1
+radius = 0.0125            # 25 mm diameter
+f_max = 2.5e9
+notes = "uncalibrated: geometric gain, placeholder f_max"
+
+[antenna.bdot-medium-b]
+turns = 1
+radius = 0.0125            # 25 mm diameter
+f_max = 2.5e9
+notes = "uncalibrated: geometric gain, placeholder f_max"
+
+[antenna.bdot-medium-c]
+turns = 1
+radius = 0.0125            # 25 mm diameter
+f_max = 2.5e9
+notes = "uncalibrated: geometric gain, placeholder f_max"
+
+[antenna.bdot-large]
+turns = 1
+radius = 0.020             # 40 mm diameter
+f_max = 2.5e9
+notes = "uncalibrated: geometric gain, placeholder f_max"
