@@ -31,12 +31,11 @@ from matplotlib.animation import FuncAnimation
 from numpy.typing import NDArray
 
 from cetal_scopes import Capture, SiglentSDS6204L
+from cetal_scopes.analysis.time import ADC_COMB_PERIOD_S
 
 CHANNELS = ("C1", "C2", "C3")
 AXIS_COLORS = ("#2a78d6", "#eb6834", "#2f9e57")
 DEFAULT_AREA = 6.8e-4
-COMB_PERIOD = 256
-"""The SDS6204L's ADC comb: spurs at ``k * fs / 256`` on every channel."""
 
 
 def find_tone(volts: NDArray[np.float64], dt: float, *, f_min: float = 1.0e6) -> float:
@@ -45,7 +44,7 @@ def find_tone(volts: NDArray[np.float64], dt: float, *, f_min: float = 1.0e6) ->
     window = np.hanning(n)
     power = np.sum(np.abs(np.fft.rfft(volts * window, axis=-1)) ** 2, axis=0)
     freq = np.fft.rfftfreq(n, dt)
-    comb_step = 1.0 / (dt * COMB_PERIOD)
+    comb_step = 1.0 / ADC_COMB_PERIOD_S  # spurs every 39.0625 MHz
     near_comb = np.abs((freq / comb_step) - np.round(freq / comb_step)) * comb_step
     power[(freq < f_min) | (near_comb < 4.0 / (n * dt))] = 0.0
     k = int(np.argmax(power[1:-1])) + 1

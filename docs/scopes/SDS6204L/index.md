@@ -87,16 +87,19 @@ is not ready — `_fetch_codes` raises rather than returning garbage.
   widen the analog front end. `SiglentSDS6204L` asserts `OFF` (linear) on
   every `configure()`; set `interpolation = "ON"` to restore it.
 - **ADC comb (16-bit path).** The SDS6204L is an 8-bit instrument whose `WORD`
-  (16-bit HD) transfer path adds a deterministic pattern with a **256-sample
-  period**: spurs at every multiple of `fs / 256` (~39.06 MHz at 10 GS/s), of
-  which `fs/8`, `fs/4` and `fs/2` are the strongest. It appears on every channel
+  (16-bit HD) transfer path adds a deterministic pattern with a **25.6 ns
+  period** (256 samples at 10 GS/s, 128 at 5 GS/s): spurs at every multiple of
+  39.0625 MHz, of which `fs/8`, `fs/4` and `fs/2` are the strongest at 10 GS/s. It appears on every channel
   including open ones, is generated after the analog front end (a 20 MHz
   bandwidth limit does not remove it; `:ACQuire:RESolution` is locked at
   `16Bits`), and persists at reduced sample rates.
   - The comb is a fixed ~10–12 ADC codes, so its size in volts scales with
     `V/div` while the signal does not. Fill the ADC range with the signal
     (coarsest useful `V/div` avoided), or use
-    `cetal_scopes.analysis.remove_adc_comb` to subtract the 256-phase pattern.
+    `cetal_scopes.analysis.remove_adc_comb` to subtract the pattern; it
+    derives the period from the sample rate. Use the true period, not a
+    multiple: a multiple also removes real signal (measured ~10x more
+    distortion of a 58 MHz pulse with 256 than 128 at 5 GS/s).
   - `:WAVeform:WIDTh BYTE` is **not** an escape: it returns the top byte of the
     same 16-bit word (a coarse staircase, ~94 mV per step at 1 V/div) and still
     carries the comb. The driver defaults to `WORD` (`sample_width="BYTE"` is

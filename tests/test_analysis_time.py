@@ -133,6 +133,18 @@ def test_remove_adc_comb_removes_pattern_and_keeps_tone() -> None:
         assert _coherent_amplitude(result.volts, k / period) < 1e-9
 
 
+@pytest.mark.parametrize(("dt", "period"), [(1e-10, 256), (2e-10, 128)])
+def test_remove_adc_comb_derives_period_from_sample_rate(
+    dt: float, period: int
+) -> None:
+    n = 4 * 256
+    rng = np.random.default_rng(0)
+    pattern = rng.normal(size=period)
+    channel = make_channel(list(pattern[np.arange(n) % period]), dt=dt)
+    result = remove_adc_comb(channel)
+    assert np.ptp(result.volts) < 1e-12
+
+
 def test_remove_adc_comb_preserves_dc() -> None:
     values = np.tile([1.0, 2.0, 3.0, 4.0], 4)
     result = remove_adc_comb(make_channel(list(values)), period=4)

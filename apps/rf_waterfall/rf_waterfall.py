@@ -78,7 +78,6 @@ from cetal_scopes.scopes.siglent import DEFAULT_ADDRESS
 #: Trend orders accepted by :func:`cetal_scopes.analysis.fft`.
 DetrendMode = Literal["constant", "linear"]
 
-COMB_PERIOD = 256
 DEFAULT_CHANNEL = "C1"
 DEFAULT_DEPTH = 200
 DEFAULT_WINDOW = "hann"
@@ -126,9 +125,10 @@ class WaterfallViewer:
         Upper frequency limit in Hz shown; defaults to each row's Nyquist.
     remove_comb : bool
         Subtract the ADC comb before each row's FFT.
-    comb_period : int
+    comb_period : int, optional
         Comb period in samples passed to
-        :func:`cetal_scopes.analysis.remove_adc_comb`.
+        :func:`cetal_scopes.analysis.remove_adc_comb`; ``None`` derives it from
+        each capture's sample rate.
     """
 
     def __init__(
@@ -142,7 +142,7 @@ class WaterfallViewer:
         cmap: str = DEFAULT_CMAP,
         freq_max: float | None = None,
         remove_comb: bool = False,
-        comb_period: int = COMB_PERIOD,
+        comb_period: int | None = None,
     ) -> None:
         self.depth = depth
         self.db_scale = db_scale
@@ -334,7 +334,7 @@ def record_waterfall(
     window: str = DEFAULT_WINDOW,
     detrend: DetrendMode | None = "constant",
     remove_comb: bool = False,
-    comb_period: int = COMB_PERIOD,
+    comb_period: int | None = None,
     on_row: Callable[[int, Spectrum], None] | None = None,
 ) -> Spectrogram:
     """Acquire ``n_sweeps`` records and stack their spectra into a :class:`Spectrogram`.
@@ -392,7 +392,7 @@ def transient_waterfall(
     window: str = DEFAULT_WINDOW,
     detrend: DetrendMode | None = "constant",
     remove_comb: bool = False,
-    comb_period: int = COMB_PERIOD,
+    comb_period: int | None = None,
     on_capture: Callable[[Channel, Spectrogram], None] | None = None,
 ) -> Spectrogram:
     """Capture one triggered record and slice it into a :func:`stft` spectrogram.
@@ -538,7 +538,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--remove-comb", action="store_true", help="subtract the ADC comb before FFT"
     )
     parser.add_argument(
-        "--comb-period", type=int, default=COMB_PERIOD, help="comb period in samples"
+        "--comb-period",
+        type=int,
+        default=None,
+        help="comb period in samples (default: 25.6 ns at the capture's rate)",
     )
     parser.add_argument(
         "--timebase", type=float, default=None, help="horizontal scale in s/div"

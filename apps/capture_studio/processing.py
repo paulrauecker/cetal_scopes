@@ -75,8 +75,8 @@ STEPS: dict[str, tuple[StepFunction, dict[str, Any], str]] = {
     "detrend": (detrend, {"type": "linear"}, "Remove a constant or linear trend."),
     "remove_adc_comb": (
         remove_adc_comb,
-        {"period": 256},
-        "Subtract the Siglent's deterministic 256-sample ADC comb.",
+        {"period": None},
+        "Subtract the Siglent's deterministic 25.6 ns ADC comb.",
     ),
     "lowpass": (lowpass, {"cutoff": None, "order": 4}, "Zero-phase low-pass."),
     "highpass": (highpass, {"cutoff": None, "order": 4}, "Zero-phase high-pass."),

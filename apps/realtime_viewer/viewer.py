@@ -31,10 +31,9 @@ from matplotlib.lines import Line2D
 
 from cetal_scopes import Capture, Channel, SiglentSDS6204L
 from cetal_scopes.analysis import fft, remove_adc_comb
+from cetal_scopes.analysis.time import ADC_COMB_PERIOD_S
 from cetal_scopes.scopes.base import Scope
 from cetal_scopes.scopes.siglent import DEFAULT_ADDRESS
-
-COMB_PERIOD = 256
 
 #: FFT window names accepted as a plain string by scipy.signal.get_window.
 WINDOW_NAMES: tuple[str, ...] = (
@@ -181,9 +180,10 @@ class RealtimeViewer:
         Upper frequency limit in Hz; defaults to each capture's Nyquist.
     remove_comb : bool
         Subtract the ADC comb before the FFT.
-    comb_period : int
+    comb_period : int, optional
         Comb period in samples passed to
-        :func:`cetal_scopes.analysis.remove_adc_comb`.
+        :func:`cetal_scopes.analysis.remove_adc_comb`; ``None`` derives it from
+        each capture's sample rate.
     amplitude_floor : float
         Smallest amplitude drawn on the log axis (avoids ``log(0)``).
     """
@@ -197,7 +197,7 @@ class RealtimeViewer:
         log_amplitude: bool = True,
         frequency_max: float | None = None,
         remove_comb: bool = False,
-        comb_period: int = COMB_PERIOD,
+        comb_period: int | None = None,
         amplitude_floor: float = 1e-9,
     ) -> None:
         if not channels:
@@ -320,8 +320,13 @@ class DemoScope(Scope):
         self.dt = dt
         self._rng = np.random.default_rng(seed)
         self._phase = 0.0
+        # The same 25.6 ns period that remove_adc_comb derives from dt.
+        self._comb_period = max(2, round(ADC_COMB_PERIOD_S / dt))
         self._comb = 0.02 * np.sin(
-            2.0 * np.pi * np.arange(COMB_PERIOD, dtype=np.float64) / COMB_PERIOD
+            2.0
+            * np.pi
+            * np.arange(self._comb_period, dtype=np.float64)
+            / self._comb_period
         )
 
     def connect(self) -> None:
@@ -334,7 +339,7 @@ class DemoScope(Scope):
         """Return one synthetic record and advance the trigger phase."""
         time = np.arange(self.n_samples, dtype=np.float64) * self.dt
         self._phase += 0.37 * self.dt
-        phase = np.arange(self.n_samples) % COMB_PERIOD
+        phase = np.arange(self.n_samples) % self._comb_period
         rows = []
         for index, _ in enumerate(self.channels):
             frequency = 1.0e6 * float(index + 1)
@@ -423,7 +428,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--remove-comb", action="store_true", help="subtract the ADC comb before FFT"
     )
     parser.add_argument(
-        "--comb-period", type=int, default=COMB_PERIOD, help="comb period in samples"
+        "--comb-period",
+        type=int,
+        default=None,
+        help="comb period in samples (default: 25.6 ns at the capture's rate)",
     )
     parser.add_argument(
         "--timebase", type=float, default=None, help="horizontal scale in s/div"

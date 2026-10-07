@@ -6,6 +6,8 @@ import bdot_vector
 import numpy as np
 import pytest
 
+from cetal_scopes.analysis.time import ADC_COMB_PERIOD_S
+
 
 def _tones(p: np.ndarray, freq: float, dt: float, n: int) -> np.ndarray:
     t = np.arange(n) * dt
@@ -24,7 +26,7 @@ def test_find_tone_and_phasors_recover_the_signal() -> None:
 
 def test_find_tone_skips_the_adc_comb() -> None:
     dt, n = 1e-10, 51_200
-    comb = 1.0 / (dt * bdot_vector.COMB_PERIOD) * 8  # fs / 32
+    comb = 8 / ADC_COMB_PERIOD_S  # 8th comb line, 312.5 MHz
     volts = _tones(np.array([1.0, 1.0, 1.0]), comb, dt, n)
     volts += _tones(np.array([0.1, 0, 0]), 50e6, dt, n)
     assert bdot_vector.find_tone(volts, dt) == pytest.approx(50e6, rel=1e-3)

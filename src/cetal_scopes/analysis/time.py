@@ -10,6 +10,7 @@ from cetal_scopes.analysis._util import DetrendMode, with_volts
 from cetal_scopes.channel import Channel
 
 __all__ = [
+    "ADC_COMB_PERIOD_S",
     "detrend",
     "gate",
     "remove_adc_comb",
@@ -101,13 +102,21 @@ def subtract_baseline(
     return with_volts(channel, channel.volts - level)
 
 
-def remove_adc_comb(channel: Channel, *, period: int = 256) -> Channel:
+ADC_COMB_PERIOD_S = 25.6e-9
+"""Period of the SDS6204L's ADC comb in seconds: lines every 39.0625 MHz.
+
+Measured as 256 samples at 10 GS/s and 128 at 5 GS/s, so the pattern is fixed
+in time, not in samples.
+"""
+
+
+def remove_adc_comb(channel: Channel, *, period: int | None = None) -> Channel:
     """Remove a periodic ADC interleave comb from the channel.
 
-    The SDS6204L's 16-bit acquisition path adds a deterministic pattern with a
-    period of ``256`` samples, producing spurs at every multiple of
-    ``fs / 256`` (about 39.06 MHz at 10 GS/s), with ``fs / 8``, ``fs / 4`` and
-    ``fs / 2`` among the strongest. Subtracting the mean of each phase
+    The SDS6204L's 16-bit acquisition path adds a deterministic pattern that
+    repeats every :data:`ADC_COMB_PERIOD_S` (25.6 ns), producing spurs at every
+    multiple of 39.0625 MHz, with ``fs / 8``, ``fs / 4`` and ``fs / 2`` among the
+    strongest at 10 GS/s. Subtracting the mean of each phase
     (``index % period``) removes exactly that pattern and is gentler than
     notching the spectrum: the overall DC level is preserved, so only the comb
     is removed.
@@ -116,16 +125,21 @@ def remove_adc_comb(channel: Channel, *, period: int = 256) -> Channel:
     ----------
     channel : Channel
         Source channel.
-    period : int
-        Pattern period in samples. Defaults to ``256``. The pattern is locked to
-        the instrument's internal ADC clock, so at decimated sample rates the
-        period in the recorded stream scales with ``fs`` (e.g. 512 at 5 GS/s).
+    period : int, optional
+        Pattern period in samples. Defaults to ``round(25.6 ns / dt)``: 256 at
+        10 GS/s, 128 at 5 GS/s. A multiple of the true period also removes the
+        comb but is not harmless: it subtracts real signal at the extra
+        multiples of ``fs / period`` as well, and averages fewer repetitions, so
+        a transient leaks more of itself into the pattern. Measured on a 58 MHz
+        test pulse in 5 GS/s data, 256 distorted it ~10x more than 128.
 
     Returns
     -------
     Channel
         Comb-corrected channel (raw codes dropped).
     """
+    if period is None:
+        period = round(ADC_COMB_PERIOD_S / channel.dt)
     if period < 2:
         raise ValueError("period must be at least 2")
     volts = channel.volts.astype(np.float64)

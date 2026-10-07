@@ -89,8 +89,9 @@ Read `docs/architecture.md` before changing the data model. In short:
   pass `interpolation = "ON"` to opt back in. Interpolate downstream instead,
   where the choice is visible in the code.
   Also expect the deterministic ADC comb from the 16-bit transfer path: a
-  256-sample pattern giving spurs at every `k*fs/256` (`fs/8`, `fs/4`, `fs/2` are
-  the strongest) on every channel including open ones. The driver defaults to
+  pattern repeating every 25.6 ns (256 samples at 10 GS/s, 128 at 5 GS/s), giving
+  spurs every 39.0625 MHz (`fs/8`, `fs/4`, `fs/2` are the strongest at 10 GS/s)
+  on every channel including open ones. The driver defaults to
   `sample_width="WORD"`; `BYTE` is a lossy top-byte truncation and still carries
   the comb. Use `analysis.remove_adc_comb()` for broadband work or analyze a
   band/tone rather than the global FFT peak.

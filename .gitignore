@@ -226,3 +226,9 @@ vendor_refs/
 
 # Local planning notes, not part of the repo.
 plans/
+
+# Local capture-studio inventories (bench-specific addresses)
+*.local.toml
+
+# Bench captures (hundreds of MB), kept locally.
+shots/
