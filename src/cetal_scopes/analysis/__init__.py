@@ -35,6 +35,7 @@ from cetal_scopes.analysis.filters import (
     lowpass,
     moving_average,
     savgol,
+    wiener,
 )
 from cetal_scopes.analysis.metrics import find_peaks, pulse_metrics, stats
 from cetal_scopes.analysis.results import (
@@ -106,5 +107,6 @@ __all__ = [
     "tone_amplitude",
     "transfer_function",
     "vector_at",
+    "wiener",
     "window_values",
 ]

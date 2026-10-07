@@ -29,6 +29,7 @@ from cetal_scopes.analysis import (
     resample,
     savgol,
     subtract_baseline,
+    wiener,
 )
 from cetal_scopes.channel import Channel
 
@@ -99,6 +100,17 @@ STEPS: dict[str, tuple[StepFunction, dict[str, Any], str]] = {
         savgol,
         {"window_s": None, "polyorder": 3},
         "Savitzky-Golay smoothing; preserves peak height and width.",
+    ),
+    "wiener": (
+        wiener,
+        {
+            "noise_start": None,
+            "noise_end": 0.0,
+            "signal_start": None,
+            "signal_end": None,
+            "resolution": None,
+        },
+        "Wiener filter: weight each frequency by its SNR against a quiet window.",
     ),
     "resample": (resample, {"dt": None, "n": None}, "Change the sample interval."),
     "envelope": (envelope, {}, "Hilbert amplitude envelope."),

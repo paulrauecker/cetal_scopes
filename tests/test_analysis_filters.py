@@ -14,6 +14,7 @@ from cetal_scopes.analysis import (
     lowpass,
     moving_average,
     savgol,
+    wiener,
 )
 
 DT = 1e-6  # 1 MS/s, Nyquist 500 kHz
@@ -160,3 +161,50 @@ def test_savgol_rejects_a_window_too_narrow_for_the_polynomial() -> None:
 def test_savgol_rejects_a_window_longer_than_the_record() -> None:
     with pytest.raises(ValueError, match="exceeds the"):
         savgol(make_channel(1e3), window_s=2 * N * DT)
+
+
+def noisy_burst(seed: int = 0) -> tuple[Channel, np.ndarray]:
+    """White noise over a 20 kHz burst that starts at t = 0, half-way in."""
+    rng = np.random.default_rng(seed)
+    n = 1 << 16
+    t = (np.arange(n) - n // 2) * DT
+    clean = np.where(t >= 0, np.sin(2.0 * np.pi * 2e4 * t), 0.0)
+    noisy = clean + rng.normal(0.0, 1.0, n)
+    channel = Channel(name="C1", volts=noisy, t0=float(t[0]), dt=DT)
+    return channel, clean
+
+
+def test_wiener_reduces_the_error_against_the_clean_signal() -> None:
+    channel, clean = noisy_burst()
+    filtered = wiener(channel, signal_end=float(channel.time[-1]))
+
+    before = np.sqrt(np.mean((channel.volts - clean) ** 2))
+    after = np.sqrt(np.mean((filtered.volts - clean) ** 2))
+    assert after < 0.2 * before
+
+
+def test_wiener_keeps_the_signal_band_and_drops_the_noise_bands() -> None:
+    channel, _ = noisy_burst()
+    filtered = gate_after_zero(wiener(channel, signal_end=float(channel.time[-1])))
+
+    assert amplitude_at(filtered, 2e4) == pytest.approx(1.0, rel=0.1)
+    assert amplitude_at(filtered, 2e5) < 0.01
+
+
+def gate_after_zero(channel: Channel) -> Channel:
+    keep = channel.time >= 0
+    return Channel(name=channel.name, volts=channel.volts[keep], t0=0.0, dt=channel.dt)
+
+
+def test_wiener_does_not_shift_the_signal_in_time() -> None:
+    channel, clean = noisy_burst()
+    filtered = wiener(channel, signal_end=float(channel.time[-1])).volts
+    lags = np.arange(-20, 21)
+    overlap = [np.dot(np.roll(filtered, int(lag)), clean) for lag in lags]
+    assert lags[int(np.argmax(overlap))] == 0
+
+
+def test_wiener_rejects_a_resolution_finer_than_the_windows() -> None:
+    channel, _ = noisy_burst()
+    with pytest.raises(ValueError, match="does not fit"):
+        wiener(channel, signal_end=1.0, resolution=1.0)
