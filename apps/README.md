@@ -25,5 +25,6 @@ Apps are linted and type-checked in CI, but not counted in library coverage.
 - `sg8_sweep/` — SG8 generator frequency-response sweep against a scope channel.
 - `rf_waterfall/` — live or recorded RF waterfall (spectrogram) of a scope channel.
 - `bdot_vector/` — live 3D arrow of the field a 3D B-dot sees at one tone (C1-C3).
+- `bdot_transient/` — single-shot 3D B-dot transient capture and vector replay.
 - `capture_studio/` — browser front end for multi-instrument single-shot
   capture and analysis (a uv workspace member; needs `fastapi`/`uvicorn`).
