@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -717,7 +718,9 @@ def test_an_unknown_export_format_is_refused(client: TestClient) -> None:
 def test_the_page_is_served_with_a_relative_base(client: TestClient) -> None:
     body = client.get("/").text
     assert '<base href="/">' in body
-    assert 'href="static/styles.css"' in body
+    assert (
+        re.search(r'href="static/styles\.css\?v=\d+"', body) is not None
+    )  # relative, cache-busted
 
 
 @pytest.mark.parametrize("prefix", ["/node/pc-oscilloscope/8000", "node/host/8000/"])

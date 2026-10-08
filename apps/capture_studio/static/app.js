@@ -1494,20 +1494,37 @@ function wire() {
     saveProcessing();
   });
 
-  $("shot-save").addEventListener("click", async () => {
+  // The path box shows a placeholder that looks like a value, so an empty box
+  // must say so rather than do nothing.
+  const shotPath = () => {
     const path = $("shot-path").value.trim();
+    if (!path) setStatus("enter a shot directory path first", "bad");
+    return path;
+  };
+  $("shot-save").addEventListener("click", async () => {
+    const path = shotPath();
     if (!path) return;
-    const payload = await post("api/shot/save", { path });
-    appendLog(`saved ${payload.path}`);
+    try {
+      const payload = await post("api/shot/save", { path });
+      appendLog(`saved ${payload.path}`);
+      setStatus(`saved ${payload.path}`);
+    } catch (error) {
+      appendLog(`save failed: ${error.message}`);
+    }
   });
   $("shot-load").addEventListener("click", async () => {
-    const path = $("shot-path").value.trim();
+    const path = shotPath();
     if (!path) return;
-    adoptShot(await post("api/shot/load", { path }));
-    // The shot brings the pipelines it was saved with.
-    await loadProcessing();
-    await refreshFigures();
-    await refreshMeasurements();
+    try {
+      adoptShot(await post("api/shot/load", { path }));
+      // The shot brings the pipelines it was saved with.
+      await loadProcessing();
+      await refreshFigures();
+      await refreshMeasurements();
+      setStatus(`loaded ${path}`);
+    } catch (error) {
+      appendLog(`load failed: ${error.message}`);
+    }
   });
 
   for (const [id, format] of [["export-csv", "csv"], ["export-npz", "npz"]]) {

@@ -8,6 +8,22 @@
   <base href="/">
   <link rel="stylesheet" href="static/styles.css">
   <script src="static/plotly.min.js"></script>
+  <script>
+    // No dev console on a phone: show script errors on the page itself.
+    function showError(text) {
+      let box = document.getElementById("js-error");
+      if (!box) {
+        box = document.createElement("pre");
+        box.id = "js-error";
+        box.style.cssText = "position:fixed;bottom:0;left:0;right:0;margin:0;padding:6px;" +
+          "background:#900;color:#fff;font-size:12px;white-space:pre-wrap;z-index:99;max-height:40vh;overflow:auto";
+        document.body.append(box);
+      }
+      box.textContent += text + "\n";
+    }
+    window.addEventListener("error", (e) => showError(`${e.message} (${(e.filename || "").split("/").pop()}:${e.lineno})`));
+    window.addEventListener("unhandledrejection", (e) => showError(`unhandled: ${e.reason && e.reason.message || e.reason}`));
+  </script>
 </head>
 <body>
   <header class="bar">

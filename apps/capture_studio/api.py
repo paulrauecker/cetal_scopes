@@ -449,7 +449,14 @@ def create_app(session: StudioSession, root_path: str = "") -> FastAPI:
     @app.get("/")
     def index() -> HTMLResponse:
         page = (STATIC / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(page.replace('<base href="/">', f'<base href="{base}">'))
+        page = page.replace('<base href="/">', f'<base href="{base}">')
+        # A phone happily reuses a cached app.js against a newer page, and the
+        # mismatch kills every handler after the first missing element. Keying
+        # the URL on the file's mtime makes a stale copy impossible.
+        for name in ("app.js", "styles.css"):
+            stamp = int((STATIC / name).stat().st_mtime)
+            page = page.replace(f"static/{name}", f"static/{name}?v={stamp}")
+        return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
