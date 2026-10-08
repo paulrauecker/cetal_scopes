@@ -268,6 +268,16 @@ def test_acquire_returns_capture() -> None:
     assert ":TRIGger:RUN" in fake.written
 
 
+def test_the_recorded_range_is_four_vertical_divisions() -> None:
+    """The screen is 8 divisions tall, so +/-4 * V/div -- not the 10-wide grid."""
+    scope, _ = make_driver()
+    scope.connect()
+    capture = scope.acquire()
+
+    # make_descriptor's default is 0.5 V/div.
+    assert capture.metadata["channel_range_mv"] == {"C1": 2000.0, "C2": 2000.0}
+
+
 def test_acquire_chunks_large_waveforms() -> None:
     descriptor = make_descriptor(frame_points=3)
     data = [np.array([1, 2], dtype=np.int16), np.array([3], dtype=np.int16)]

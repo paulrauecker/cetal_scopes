@@ -1277,7 +1277,7 @@ class SiglentSDS6204L(Scope):
 
         for channel in self._channels:
             codes, desc = self._fetch_codes(channel)
-            ranges_mv[channel] = desc.vdiv_scaled * self._grid_num / 2.0 * 1000.0
+            ranges_mv[channel] = desc.vdiv_scaled * VGRID_NUM / 2.0 * 1000.0
             offsets_v[channel] = desc.voffset_scaled
             shift = 8 if self._sample_width == "BYTE" and desc.adc_bit > 8 else 0
             volts_rows.append(codes_to_volts(codes, desc, shift=shift))
