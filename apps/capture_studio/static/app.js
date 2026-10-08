@@ -874,8 +874,27 @@ const SETTING_FIELDS = [
 const TRIGGER_FIELDS = [
   ["source", "text", "e.g. C1, EXT, EX5"],
   ["level", "number", "V"],
-  ["slope", "text", "RISing / FALLing"],
+  ["slope", "text", "RISING / FALLING / EITHER (both edges)"],
 ];
+
+// Suggestions only: the field stays free text, so a driver's own SCPI
+// spelling (e.g. Siglent's ALTernate) still goes through unchanged.
+const SLOPE_OPTIONS = ["RISING", "FALLING", "EITHER"];
+
+function slopeDatalist() {
+  let list = document.getElementById("slope-options");
+  if (!list) {
+    list = document.createElement("datalist");
+    list.id = "slope-options";
+    for (const value of SLOPE_OPTIONS) {
+      const option = document.createElement("option");
+      option.value = value;
+      list.append(option);
+    }
+    document.body.append(list);
+  }
+  return list.id;
+}
 
 function field(label, node, hint) {
   const wrap = document.createElement("label");
@@ -1221,6 +1240,7 @@ function renderInventory() {
         type,
         width: type === "number" ? "6em" : "6em",
       });
+      if (name === "slope") input.setAttribute("list", slopeDatalist());
       input.addEventListener("change", () => {
         const value = type === "number" ? readNumber(input) : input.value.trim() || null;
         const current =

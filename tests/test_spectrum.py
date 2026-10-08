@@ -25,14 +25,19 @@ from cetal_scopes.scopes.spectrum import (
     SPC_SAMPLERATE,
     SPC_SEGMENTSIZE,
     SPC_TIMEOUT,
+    SPC_TM_BOTH,
     SPC_TM_NEG,
+    SPC_TM_POS,
     SPC_TMASK_NONE,
     SPC_TMASK_SOFTWARE,
     SPC_TRIG_ANDMASK,
     SPC_TRIG_CH0_LEVEL0,
     SPC_TRIG_CH0_MODE,
     SPC_TRIG_CH_ANDMASK0,
+    SPC_TRIG_CH_AVAILMODESOR,
     SPC_TRIG_CH_ORMASK0,
+    SPC_TRIG_EXT0_AVAILMODES,
+    SPC_TRIG_EXT0_MODE,
     SPC_TRIG_ORMASK,
     SPCM_TYPE_AI,
     codes_to_volts,
@@ -63,6 +68,7 @@ class FakeCard:
         function_type: int = SPCM_TYPE_AI,
         timeout: bool = False,
         dma_unfinished_polls: int = 0,
+        trigger_modes: int = SPC_TM_POS | SPC_TM_NEG | SPC_TM_BOTH,
     ) -> None:
         self.registers: dict[int, int] = {}
         self.commands: list[int] = []
@@ -79,6 +85,7 @@ class FakeCard:
         # How many status reads report the DMA as still running -- a card
         # whose wait returned before the transfer finished.
         self.dma_unfinished_polls = dma_unfinished_polls
+        self._trigger_modes = trigger_modes
 
     def open(self, device: str) -> None:
         self.opened_device = device
@@ -100,6 +107,8 @@ class FakeCard:
                 self.dma_unfinished_polls -= 1
                 return 0
             return spectrum.M2STAT_DATA_END
+        if register in (SPC_TRIG_CH_AVAILMODESOR, SPC_TRIG_EXT0_AVAILMODES):
+            return self._trigger_modes
         raise AssertionError(f"unexpected get_i32({register})")
 
     def get_i64(self, register: int) -> int:
@@ -466,6 +475,45 @@ def test_acquire_configures_channel_trigger() -> None:
     assert card.registers[SPC_TRIG_CH0_MODE + 1] == SPC_TM_NEG
     expected_code = volts_to_code(0.5, 1000, 2047)
     assert card.registers[SPC_TRIG_CH0_LEVEL0 + 1] == expected_code
+
+
+@pytest.mark.parametrize("slope", ["EITHER", "both", "Either"])
+def test_acquire_configures_an_either_edge_channel_trigger(slope: str) -> None:
+    scope, card = make_driver(channels=("CH0",))
+    scope.configure({"record_length": 32, "trigger": {"source": "CH0", "slope": slope}})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    scope.acquire()
+
+    assert card.registers[SPC_TRIG_CH0_MODE] == SPC_TM_BOTH
+
+
+def test_acquire_configures_an_either_edge_external_trigger() -> None:
+    scope, card = make_driver()
+    scope.configure(
+        {
+            "record_length": 32,
+            "trigger": {"source": "EXT", "level": 0.5, "slope": "EITHER"},
+        }
+    )
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    scope.acquire()
+
+    assert card.registers[SPC_TRIG_EXT0_MODE] == SPC_TM_BOTH
+
+
+def test_acquire_rejects_a_slope_the_card_does_not_offer() -> None:
+    scope, card = make_driver(channels=("CH0",))
+    card._trigger_modes = SPC_TM_POS | SPC_TM_NEG
+    scope.configure(
+        {"record_length": 32, "trigger": {"source": "CH0", "slope": "EITHER"}}
+    )
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    with pytest.raises(ValueError, match="does not support trigger mode"):
+        scope.acquire()
+    assert SPC_TRIG_CH0_MODE not in card.registers
 
 
 def test_configure_rejects_trigger_source_not_in_channels() -> None:

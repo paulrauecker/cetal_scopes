@@ -106,6 +106,8 @@ SPC_TRIG_CH0_LEVEL0 = 42200
 SPC_TRIG_TERM = 40110
 SPC_TRIG_EXT0_MODE = 40510
 SPC_TRIG_EXT0_LEVEL0 = 42320
+SPC_TRIG_CH_AVAILMODESOR = 40601
+SPC_TRIG_EXT0_AVAILMODES = 40500
 
 SPCM_TYPE_AI = 1
 SPC_CM_INTPLL = 1
@@ -116,6 +118,7 @@ SPC_TMASK_SOFTWARE = 1
 SPC_TMASK_EXT0 = 2
 SPC_TM_POS = 1
 SPC_TM_NEG = 2
+SPC_TM_BOTH = 4
 
 M2CMD_CARD_RESET = 1
 M2CMD_CARD_START = 4
@@ -140,6 +143,8 @@ _SLOPE_MODES = {
     "rising": SPC_TM_POS,
     "neg": SPC_TM_NEG,
     "falling": SPC_TM_NEG,
+    "both": SPC_TM_BOTH,
+    "either": SPC_TM_BOTH,
 }
 
 
@@ -285,9 +290,23 @@ def _slope_mode(slope: str | None) -> int:
     if key not in _SLOPE_MODES:
         raise ValueError(
             f"unsupported trigger slope {slope!r}; expected one of "
-            f"('POS', 'NEG', 'RISING', 'FALLING')"
+            f"('POS', 'NEG', 'RISING', 'FALLING', 'BOTH', 'EITHER')"
         )
     return _SLOPE_MODES[key]
+
+
+def _require_trigger_mode(card: _Card, availmodes_register: int, mode: int) -> None:
+    """Raise unless the card lists ``mode`` in ``availmodes_register``.
+
+    The card would reject an unsupported mode at the register write anyway, but
+    with a bare driver error code; this names the slope that was asked for.
+    """
+    available = card.get_i32(availmodes_register)
+    if not available & mode:
+        raise ValueError(
+            f"this card does not support trigger mode {mode:#x} on that source "
+            f"(available modes {available:#x})"
+        )
 
 
 class _Card(Protocol):
@@ -1007,7 +1026,9 @@ class SpectrumM5i3367(Scope):
             # Ext0 ("Trig In"). Its level register is in millivolts referred to
             # the connector, not to a channel's range, so it does not go
             # through volts_to_code().
-            card.set_i32(SPC_TRIG_EXT0_MODE, _slope_mode(self._trigger.slope))
+            mode = _slope_mode(self._trigger.slope)
+            _require_trigger_mode(card, SPC_TRIG_EXT0_AVAILMODES, mode)
+            card.set_i32(SPC_TRIG_EXT0_MODE, mode)
             level = self._trigger.level if self._trigger.level is not None else 0.0
             millivolts = round(level * 1000.0)
             if not -EXT0_LEVEL_LIMIT_MV <= millivolts <= EXT0_LEVEL_LIMIT_MV:
@@ -1019,6 +1040,7 @@ class SpectrumM5i3367(Scope):
             card.set_i32(SPC_TRIG_ORMASK, SPC_TMASK_EXT0)
         else:
             index, mode, code = self._resolve_channel_trigger()
+            _require_trigger_mode(card, SPC_TRIG_CH_AVAILMODESOR, mode)
             card.set_i32(SPC_TRIG_CH0_MODE + index, mode)
             card.set_i32(SPC_TRIG_CH0_LEVEL0 + index, code)
             card.set_i32(SPC_TRIG_CH_ORMASK0, 1 << index)

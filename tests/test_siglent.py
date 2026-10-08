@@ -672,6 +672,23 @@ def test_set_edge_trigger_writes_and_reads_level() -> None:
     assert scope.trigger_level() == pytest.approx(2.25e-3)
 
 
+@pytest.mark.parametrize(
+    ("slope", "scpi"),
+    [
+        ("EITHER", "ALTernate"),
+        ("both", "ALTernate"),
+        ("FALLING", "FALLing"),
+        ("pos", "RISing"),
+        ("ALTernate", "ALTernate"),
+    ],
+)
+def test_set_edge_trigger_maps_shared_slope_spellings(slope: str, scpi: str) -> None:
+    scope, transport = make_driver()
+    scope.connect()
+    scope.set_edge_trigger(slope=slope)
+    assert f":TRIGger:EDGE:SLOPe {scpi}" in transport.written
+
+
 def test_configure_rejects_non_mapping_vertical() -> None:
     scope, _ = make_driver()
     scope.connect()

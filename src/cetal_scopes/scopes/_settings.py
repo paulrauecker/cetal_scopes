@@ -15,6 +15,7 @@ application code can drive any instrument without knowing its front panel:
 - ``coupling`` -- e.g. ``"DC"``, ``"AC"``
 - ``impedance`` -- ohms
 - ``trigger`` -- mapping with ``source``, ``level`` (volts), ``slope``
+  (``"RISING"``, ``"FALLING"``, or ``"EITHER"`` for both edges)
 
 ``range``, ``offset``, ``coupling``, and ``impedance`` each accept either a
 single value (applied to every channel) or a mapping from channel name to

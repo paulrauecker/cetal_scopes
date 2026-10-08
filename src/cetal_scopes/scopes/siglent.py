@@ -466,6 +466,20 @@ def _normalize_impedance(value: str) -> str:
     )
 
 
+#: Shared slope spellings (also accepted by the M5i driver) mapped to this
+#: scope's ``:TRIGger:EDGE:SLOPe`` values; anything else is passed through as
+#: SCPI. ``ALTernate`` fires on either edge.
+_EDGE_SLOPES = {
+    "pos": "RISing",
+    "rising": "RISing",
+    "neg": "FALLing",
+    "falling": "FALLing",
+    "both": "ALTernate",
+    "either": "ALTernate",
+    "alternate": "ALTernate",
+}
+
+
 _TOP_TO_VERTICAL_KEY = {
     "range": "scale",
     "offset": "offset",
@@ -1125,8 +1139,9 @@ class SiglentSDS6204L(Scope):
             self._write(f":TRIGger:EDGE:LEVel {float(level):.6g}")
             self._trigger_level = float(level)
         if slope is not None:
+            slope = _EDGE_SLOPES.get(str(slope).strip().lower(), str(slope))
             self._write(f":TRIGger:EDGE:SLOPe {slope}")
-            self._trigger_slope = str(slope)
+            self._trigger_slope = slope
 
     def trigger_level(self) -> float:
         """Return the edge-trigger level in volts, as the instrument reports it.
