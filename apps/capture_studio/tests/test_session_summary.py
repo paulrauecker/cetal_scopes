@@ -139,3 +139,50 @@ def test_a_constant_channel_reports_no_step_rather_than_guessing() -> None:
         metadata={"instrument": "test"},
     )
     assert "step" not in summary_of_capture(capture)
+
+
+# --- clipping warnings ------------------------------------------------------
+
+
+def swing_capture(peak: float, **metadata: object) -> Capture:
+    t = np.arange(1024) * 1e-9
+    return Capture(
+        volts=np.vstack([peak * np.sin(2 * np.pi * 5e6 * t)] * 2),
+        t0=0.0,
+        dt=1e-9,
+        channel_names=("A", "B"),
+        metadata={"instrument": "test", **metadata},
+    )
+
+
+RANGE_200 = {"channel_range_mv": {"A": 200, "B": 200}}
+
+
+def test_a_signal_at_the_range_is_called_clipping() -> None:
+    text = summary_of_capture(swing_capture(0.2, **RANGE_200))
+    assert "WARNING A" in text
+    assert "probably clipping" in text
+
+
+def test_a_signal_near_the_range_is_flagged_but_not_called_clipping() -> None:
+    text = summary_of_capture(swing_capture(0.19, **RANGE_200))
+    assert "warning A" in text
+    assert "close to clipping" in text
+    assert "probably clipping" not in text
+
+
+def test_a_comfortable_signal_gets_no_warning() -> None:
+    assert "warning" not in summary_of_capture(swing_capture(0.1, **RANGE_200)).lower()
+
+
+def test_the_offset_moves_the_clipping_point() -> None:
+    """A 0.15 V swing sits at 0.25 V once the 0.1 V offset is accounted for."""
+    text = summary_of_capture(
+        swing_capture(0.15, **RANGE_200, channel_offset_v={"A": 0.1, "B": 0.0})
+    )
+    assert "WARNING A" in text
+    assert "B:" not in text
+
+
+def test_no_range_means_no_claim() -> None:
+    assert "warning" not in summary_of_capture(swing_capture(5.0)).lower()

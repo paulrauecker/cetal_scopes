@@ -1270,11 +1270,15 @@ class SiglentSDS6204L(Scope):
         volts_rows: list[NDArray[np.float64]] = []
         raw_rows: list[NDArray[Any]] = []
         names: list[str] = []
+        ranges_mv: dict[str, float] = {}
+        offsets_v: dict[str, float] = {}
         t0: float | None = None
         dt: float | None = None
 
         for channel in self._channels:
             codes, desc = self._fetch_codes(channel)
+            ranges_mv[channel] = desc.vdiv_scaled * self._grid_num / 2.0 * 1000.0
+            offsets_v[channel] = desc.voffset_scaled
             shift = 8 if self._sample_width == "BYTE" and desc.adc_bit > 8 else 0
             volts_rows.append(codes_to_volts(codes, desc, shift=shift))
             raw_rows.append(codes)
@@ -1295,7 +1299,11 @@ class SiglentSDS6204L(Scope):
             dt=dt,
             channel_names=tuple(names),
             raw=raw,
-            metadata=self._scope_metadata(dt, n_samples),
+            metadata={
+                **self._scope_metadata(dt, n_samples),
+                "channel_range_mv": ranges_mv,
+                "channel_offset_v": offsets_v,
+            },
         )
 
     def abort(self) -> None:

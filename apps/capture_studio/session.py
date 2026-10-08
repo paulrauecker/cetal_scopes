@@ -137,6 +137,48 @@ def _resolution_line(capture: Capture, metadata: Mapping[str, Any]) -> str | Non
     return "  " + ", ".join(parts)
 
 
+#: Fraction of the input range at which a channel is called "close to clipping".
+_NEAR_CLIP = 0.9
+
+
+def _clipping_lines(capture: Capture, metadata: Mapping[str, Any]) -> list[str]:
+    """Warn per channel when the signal is at, or near, the input range.
+
+    A channel's usable span is ``+/-range`` around its offset
+    (``V = code * scale - offset``), so the peak is compared against that
+    rather than against the raw codes, which differ between drivers. Needs the
+    ``channel_range_mv`` the drivers record; without it nothing is claimed.
+    """
+    ranges = metadata.get("channel_range_mv")
+    if not isinstance(ranges, Mapping) or not ranges:
+        return []
+    offsets = metadata.get("channel_offset_v")
+    if not isinstance(offsets, Mapping):
+        offsets = {}
+    lines: list[str] = []
+    for name, row in zip(capture.channel_names or (), np.atleast_2d(capture.volts)):
+        range_v = ranges.get(name)
+        if range_v is None or float(range_v) <= 0 or row.size == 0:
+            continue
+        range_v = float(range_v) / 1000.0
+        centred = row + float(offsets.get(name, 0.0))
+        peak = float(np.max(np.abs(centred)))
+        fraction = peak / range_v
+        if fraction >= 1.0:
+            lines.append(
+                f"  WARNING {name}: peak {_eng(peak, 'V', 3)} reaches the "
+                f"+/-{_eng(range_v, 'V', 3)} input range -- the signal is "
+                "probably clipping; raise the range"
+            )
+        elif fraction >= _NEAR_CLIP:
+            lines.append(
+                f"  warning {name}: peak {_eng(peak, 'V', 3)} is "
+                f"{fraction:.0%} of the +/-{_eng(range_v, 'V', 3)} input range "
+                "-- close to clipping"
+            )
+    return lines
+
+
 def _trigger_line(metadata: Mapping[str, Any]) -> str | None:
     """One line describing the trigger, or ``None`` if the driver records none.
 
@@ -209,6 +251,7 @@ def summarize_shot(shot: Shot, *, verbose: bool = False) -> list[str]:
         resolution = _resolution_line(capture, metadata)
         if resolution is not None:
             lines.append(resolution)
+        lines.extend(_clipping_lines(capture, metadata))
 
         trigger = _trigger_line(metadata)
         if trigger is not None:
