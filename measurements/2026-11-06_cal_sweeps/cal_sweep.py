@@ -48,15 +48,20 @@ out.mkdir(parents=True, exist_ok=True)
 path = out / f"{datetime.now():%Y-%m-%d_%H%M%S}_{args.label}.csv"
 
 
-def shot(s):
-    s.arm(); s.force_trigger()
-    if not s.wait(10):
-        raise RuntimeError("no trigger")
-    return s.fetch()
+def shot(s, tries=3):
+    for attempt in range(tries):
+        s.arm(); s.force_trigger()
+        if s.wait(10):
+            return s.fetch()
+        s.abort()
+        print(f"  missed forced trigger (attempt {attempt + 1}/{tries})", flush=True)
+    raise RuntimeError("no trigger")
 
 
 start = time.monotonic()
 rows = []
+fh = path.open("w", newline="")
+writer = None
 with SiglentSDS6204L("192.168.0.11", channels=CHANNELS, timeout=5, acquire_timeout=10) as s, \
         SG8SignalGenerator("ASRL/dev/ttyUSB0::INSTR") as g:
     s.configure({"sample_rate": 5e9, "record_length": args.record, "pretrigger": 0.5,
@@ -111,6 +116,11 @@ with SiglentSDS6204L("192.168.0.11", channels=CHANNELS, timeout=5, acquire_timeo
                     "shots": args.shots, "sample_rate_hz": fs,
                     "samples": cap.volts.shape[1], "range_v": args.range,
                 })
+            if writer is None:
+                writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+                writer.writeheader()
+            writer.writerows(rows[-len(CHANNELS):])
+            fh.flush()
             line = "  ".join(f"{c} {20 * np.log10(np.mean(amps[c])):6.1f}" for c in CHANNELS)
             clip = "".join("X" if peak[c] >= 0.98 * args.range else "." for c in CHANNELS)
             print(f"{f / 1e6:8.2f} MHz  {line} dBV  clip {clip}  t={time.monotonic() - start:5.1f}s",
@@ -119,9 +129,5 @@ with SiglentSDS6204L("192.168.0.11", channels=CHANNELS, timeout=5, acquire_timeo
         g.set_output(False)
         print("SG8 output off:", not g.output())
 
-if rows:
-    with path.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
+        fh.close()
 print(f"wrote {len(rows)} rows -> {path}  ({time.monotonic() - start:.1f}s)")
