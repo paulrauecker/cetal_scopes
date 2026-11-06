@@ -231,7 +231,10 @@ def parse_antenna_catalog(raw: Mapping[str, Any]) -> AntennaCatalog:
         raise ValueError(f"unexpected top-level keys {unknown}; expected [antenna.*]")
     entries = raw.get("antenna", {})
     if not isinstance(entries, Mapping):
-        raise ValueError("'antenna' must be a table of [antenna.<name>] tables")
+        # A malformed file, not a caller's type error: callers catch ValueError.
+        raise ValueError(  # noqa: TRY004
+            "'antenna' must be a table of [antenna.<name>] tables"
+        )
     antennas: dict[str, Antenna] = {}
     for name, entry in entries.items():
         try:
