@@ -6,7 +6,7 @@ arm_timeout = 5.0
 [[instrument]]
 label = "siglent"
 driver = "siglent_sds6204l"
-address = "192.168.5.126"
+address = "192.168.0.11"
 channels = ["C1", "C2", "C3", "C4"]
 timeout = 10.0
 
@@ -27,11 +27,14 @@ source = "C2"
 level = 0.05
 slope = "RISing"
 
+# C1-C3 are the three loops of one 3D B-dot, C4 the PBS-H3 alongside it.
+# axis = loop normal, signed so a rising B along it reads positive. Signs are
+# not yet checked on the bench (magnet or Helmholtz coil) -- flip if inverted.
 [instrument.antennas]
-C1 = "bdot-medium-a"
-C2 = "bdot-large"
-C3 = "bdot-small"
-C4 = "PBS-H3"
+C1 = { antenna = "bdot-medium-a", axis = [0, 1, 0] }
+C2 = { antenna = "bdot-large", axis = [0, 0, 1] }
+C3 = { antenna = "bdot-small", axis = [1, 0, 0] }
+C4 = { antenna = "PBS-H3", axis = [0, 0, 1] }
 
 [[instrument]]
 label = "m5i"

@@ -114,8 +114,10 @@ class Antenna:
     kind : str, optional
         Sensor family, e.g. ``"b-dot"``, ``"loop"``, ``"e-field"``.
     axis : sequence of float, optional
-        Sensor orientation as a 3-vector in the lab frame. Only its direction
-        matters; :attr:`unit_axis` returns the normalized form.
+        Sensor orientation as a 3-vector in the lab frame: for a loop, its
+        normal, signed so that a rising field along it gives a positive
+        voltage. Only its direction matters; :attr:`unit_axis` returns the
+        normalized form.
     transfer_function : TransferFunction, optional
         Frequency-dependent complex calibration.
     delay : float, optional
