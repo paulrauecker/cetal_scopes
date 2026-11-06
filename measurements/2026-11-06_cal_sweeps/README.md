@@ -17,7 +17,7 @@ C1-C3 are the three loops of the 3D B-dot, C4 the Aaronia PBS-H3.
 | `*_farfield_1.5m.csv` | TX at 1.5 m, far field | +10 dBm | +/-20 mV | 14, 30 MHz-2 GHz | 2 |
 | `*_nearfield_levelcheck.csv` | TX in near field, loop in xy plane (axis z) | -20 dBm | +/-0.5 V | 6 | 1 |
 | `*_nearfield_quick.csv` | same | 0 dBm | +/-0.1 V | 16, 10 MHz-2 GHz | 2 |
-| `*_nearfield_fine.csv` | same | 0 dBm | +/-0.1 V | 100 log-spaced, 10 MHz-1 GHz | 5 | (pending: first attempt aborted at 23 MHz on a missed forced trigger)
+| `*_nearfield_fine.csv` | same | 0 dBm | +/-0.1 V | 100 log-spaced, 10 MHz-1 GHz | 5 |
 
 The near-field TX distance was not recorded.
 
@@ -42,3 +42,6 @@ locked to the generator, so phases are relative to C4 (`phase_vs_c4_deg`);
   ~100-200 MHz anyway.
 - Ambient lines seen with the generator off: ~2.4 GHz (WiFi), 925/930 MHz
   (GSM), ~390 MHz.
+- Fine sweep: 5 of 500 forced triggers did not complete within 10 s and were
+  retried once (successfully). No point is missing; nothing clipped (max
+  input 87 mV against the +/-0.1 V range).
