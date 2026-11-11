@@ -72,7 +72,9 @@ MAX_RATE_2CH_HZ = 5e9
 
 _VALID_CHANNELS = ("CH0", "CH1")
 _CHANNEL_INDEX = {"CH0": 0, "CH1": 1}
-_PANEL_KEYS: frozenset[str] = frozenset({"segments", "trigger_termination"})
+_PANEL_KEYS: frozenset[str] = frozenset(
+    {"segments", "trigger_termination", "reference_clock"}
+)
 _CONFIG_KEYS = PHYSICAL_KEYS | _PANEL_KEYS
 
 # ---------------------------------------------------------------------------
@@ -92,6 +94,7 @@ SPC_MEMSIZE = 10000
 SPC_SEGMENTSIZE = 10010
 SPC_POSTTRIGGER = 10100
 SPC_CLOCKMODE = 20200
+SPC_REFERENCECLOCK = 20140
 SPC_SAMPLERATE = 20000
 SPC_AMP0 = 30010
 SPC_AMP1 = 30110
@@ -111,6 +114,7 @@ SPC_TRIG_EXT0_AVAILMODES = 40500
 
 SPCM_TYPE_AI = 1
 SPC_CM_INTPLL = 1
+SPC_CM_EXTREFCLOCK = 32
 SPC_REC_STD_SINGLE = 1
 SPC_REC_STD_MULTI = 2
 SPC_TMASK_NONE = 0
@@ -147,6 +151,14 @@ EXT0_LEVEL_LIMIT_MV = 5000
 #: the driver writes the termination on every arm.
 EXT0_TERMINATIONS_OHM: dict[int, int] = {50: 1, 3000: 0}
 DEFAULT_EXT0_TERMINATION_OHM = 3000
+
+#: External reference clock ("Clk In") range accepted by the PLL, in hertz.
+#: The card locks its sample clock to it; ``SPC_SAMPLERATE`` still sets the
+#: rate. Without a stable signal at the connector the card refuses to start
+#: (driver error 268, ``ERR_CLOCKNOTLOCKED``) rather than run unlocked.
+#: Verified against the Siglent SDS6204L's rear 10 MHz Out
+#: (``:SYSTem:CLOCk IN_ON``; 0-1.5 V square into 50 ohm).
+REFERENCE_CLOCK_RANGE_HZ: tuple[float, float] = (1e6, 750e6)
 
 _SLOPE_MODES = {
     "pos": SPC_TM_POS,
@@ -463,9 +475,12 @@ class SpectrumM5i3367(Scope):
     ``offset``, ``coupling``, ``impedance``, ``trigger``), plus one
     M5i-specific keys: ``segments``, where an ``int`` switches acquisition
     to Multiple Recording (use :meth:`acquire_segments`, not :meth:`acquire`)
-    and ``None`` (the default) is Standard Single; and
+    and ``None`` (the default) is Standard Single;
     ``trigger_termination``, the external trigger input's termination in ohms
-    (``3000``, the default, or ``50``; see :meth:`set_trigger_termination`).
+    (``3000``, the default, or ``50``; see :meth:`set_trigger_termination`);
+    and ``reference_clock``, the frequency in hertz of a reference on Clk In
+    to lock the sample clock to (``None``, the default, is the internal PLL
+    reference; see :meth:`set_reference_clock`).
 
     ``coupling`` and ``impedance`` are fixed in hardware (DC, 50 ohm): they
     are accepted as no-ops when they match, and raise :class:`ValueError`
@@ -516,6 +531,7 @@ class SpectrumM5i3367(Scope):
         self._offset_v: dict[str, float] = dict.fromkeys(self._channels, 0.0)
         self._trigger = TriggerSettings()
         self._trigger_termination_ohm = DEFAULT_EXT0_TERMINATION_OHM
+        self._reference_clock_hz: float | None = None
         self._segments: int | None = None
         self._armed = False
         self._pending: _PendingAcquisition | None = None
@@ -628,6 +644,36 @@ class SpectrumM5i3367(Scope):
             self.set_segments(settings["segments"])
         if "trigger_termination" in settings:
             self.set_trigger_termination(settings["trigger_termination"])
+        if "reference_clock" in settings:
+            self.set_reference_clock(settings["reference_clock"])
+
+    def set_reference_clock(self, hertz: float | None) -> None:
+        """Lock the sample clock to an external reference on Clk In, or not.
+
+        ``hertz`` is the reference's frequency (e.g. ``10e6`` for the
+        Siglent's rear 10 MHz Out); ``None`` returns to the internal
+        reference. The card cannot measure the reference, so the value must
+        be right: a wrong one either fails to lock (``arm()`` raises driver
+        error 268) or locks the PLL to the wrong multiple. Sharing a
+        reference removes the frequency offset between instruments' clocks;
+        it does not align their sample instants or triggers.
+
+        Raises
+        ------
+        ValueError
+            If ``hertz`` is outside :data:`REFERENCE_CLOCK_RANGE_HZ`.
+        """
+        if hertz is None:
+            self._reference_clock_hz = None
+            return
+        value = float(hertz)
+        low, high = REFERENCE_CLOCK_RANGE_HZ
+        if not low <= value <= high:
+            raise ValueError(
+                f"reference clock {hertz!r} Hz is outside the M5i.3367-x16's "
+                f"{low / 1e6:g}-{high / 1e6:g} MHz external reference range"
+            )
+        self._reference_clock_hz = value
 
     def set_trigger_termination(self, ohms: float) -> None:
         """Select the external trigger input's termination: 50 or 3000 ohm.
@@ -1039,7 +1085,11 @@ class SpectrumM5i3367(Scope):
         mask = sum(1 << _CHANNEL_INDEX[channel] for channel in self._channels)
         card.set_i32(SPC_CHENABLE, mask)
 
-        card.set_i32(SPC_CLOCKMODE, SPC_CM_INTPLL)
+        if self._reference_clock_hz is None:
+            card.set_i32(SPC_CLOCKMODE, SPC_CM_INTPLL)
+        else:
+            card.set_i32(SPC_CLOCKMODE, SPC_CM_EXTREFCLOCK)
+            card.set_i64(SPC_REFERENCECLOCK, round(self._reference_clock_hz))
         card.set_i64(SPC_SAMPLERATE, int(self._sample_rate))
 
         for channel in self._channels:
@@ -1138,6 +1188,8 @@ class SpectrumM5i3367(Scope):
             "trigger_level_v": self._trigger.level,
             "trigger_slope": self._trigger.slope,
             "trigger_termination_ohm": self._trigger_termination_ohm,
+            # None: the card's internal reference.
+            "reference_clock_hz": self._reference_clock_hz,
             "max_adc_value": self._max_adc,
             "bytes_per_sample": self._bytes_per_sample,
             "segments": self._segments,

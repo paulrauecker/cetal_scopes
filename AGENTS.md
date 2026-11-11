@@ -131,6 +131,12 @@ Read `docs/architecture.md` before changing the data model. In short:
   there. Arm the
   M5i before the Siglent. The driver cannot set or read the Aux Out mode;
   check it on the front panel. `apps/trigger_link` re-runs the check.
+- Shared clock: the Siglent's rear 10 MHz Out (`:SYSTem:CLOCk IN_ON`, a
+  front-panel/system setting the driver does not touch) into the M5i's Clk In
+  locks with M5i `reference_clock = 10e6` (`SPC_CM_EXTREFCLOCK`). With no
+  signal, or a wrong frequency claimed, `arm()` fails with driver error 268
+  (clock not locked) instead of running unlocked. It removes the clocks'
+  frequency offset only; trigger alignment is unchanged.
 - Siglent gotcha: `t0` carries no sub-sample trigger offset, so a capture's
   `t = 0` is the trigger only to within one sample (~30 ps rms against a CW
   tone at 10 GS/s, more on slow edges). Shot-to-shot timing between

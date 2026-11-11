@@ -17,11 +17,15 @@ from cetal_scopes.scopes.spectrum import (
     SPC_AMP0,
     SPC_CARDMODE,
     SPC_CHENABLE,
+    SPC_CLOCKMODE,
+    SPC_CM_EXTREFCLOCK,
+    SPC_CM_INTPLL,
     SPC_MEMSIZE,
     SPC_OFFS0,
     SPC_POSTTRIGGER,
     SPC_REC_STD_MULTI,
     SPC_REC_STD_SINGLE,
+    SPC_REFERENCECLOCK,
     SPC_SAMPLERATE,
     SPC_SEGMENTSIZE,
     SPC_TIMEOUT,
@@ -536,6 +540,41 @@ def test_external_trigger_termination_rejects_other_values() -> None:
     scope, _ = make_driver()
     with pytest.raises(ValueError, match="termination"):
         scope.configure({"trigger_termination": 1e6})
+
+
+def test_internal_clock_is_the_default() -> None:
+    scope, card = make_driver()
+    scope.configure({"record_length": 32})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    capture = scope.acquire()
+
+    assert card.registers[SPC_CLOCKMODE] == SPC_CM_INTPLL
+    assert SPC_REFERENCECLOCK not in card.registers
+    assert capture.metadata["reference_clock_hz"] is None
+
+
+def test_external_reference_clock_is_written_and_recorded() -> None:
+    scope, card = make_driver()
+    scope.configure({"record_length": 32, "reference_clock": 10e6})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    capture = scope.acquire()
+
+    assert card.registers[SPC_CLOCKMODE] == SPC_CM_EXTREFCLOCK
+    assert card.registers[SPC_REFERENCECLOCK] == 10_000_000
+    assert capture.metadata["reference_clock_hz"] == 10e6
+
+    scope.configure({"reference_clock": None})
+    scope.acquire()
+    assert card.registers[SPC_CLOCKMODE] == SPC_CM_INTPLL
+
+
+@pytest.mark.parametrize("hertz", [0.5e6, 1e9])
+def test_reference_clock_outside_the_pll_range_is_rejected(hertz: float) -> None:
+    scope, _ = make_driver()
+    with pytest.raises(ValueError, match="reference clock"):
+        scope.configure({"reference_clock": hertz})
 
 
 def test_acquire_rejects_a_slope_the_card_does_not_offer() -> None:
