@@ -47,7 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "TOML antenna catalogue the inventory's channel antennas name. "
             f"Default: {ANTENNAS_FILE} beside --config, if there is one. The "
-            "built-in reference probes (PBS-H1 ... PBS-E1) are always available."
+            "built-in reference antennas (PBS-H1 ... PBS-E1, USLP-9143) are "
+            "always available."
         ),
     )
     parser.add_argument(

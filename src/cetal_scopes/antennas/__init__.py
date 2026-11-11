@@ -14,9 +14,11 @@ from cetal_scopes.antennas.catalog import (
     load_antenna_catalog,
     parse_antenna_catalog,
 )
+from cetal_scopes.antennas.schwarzbeck import USLP9143_CALIBRATION, uslp9143
 
 __all__ = [
     "PBS1_PROBES",
+    "USLP9143_CALIBRATION",
     "AntennaCatalog",
     "AntennaEntry",
     "PBS1Probe",
@@ -24,4 +26,5 @@ __all__ = [
     "load_antenna_catalog",
     "parse_antenna_catalog",
     "pbs1",
+    "uslp9143",
 ]

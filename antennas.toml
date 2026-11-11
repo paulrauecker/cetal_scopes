@@ -1,7 +1,7 @@
 # The bench's own probes. Capture studio reads this from beside bench.toml;
 # bench.toml names one per channel under [instrument.antennas].
-# The Aaronia reference probes (PBS-H1 ... PBS-H4, PBS-E1) are built in and
-# need no entry here.
+# The reference antennas (Aaronia PBS-H1 ... PBS-H4, PBS-E1; Schwarzbeck
+# USLP-9143) are built in and need no entry here.
 #
 # PRELIMINARY: none of these is calibrated yet. The gain is the ideal
 # single-turn loop, N * A = pi * (d/2)^2 in V/(T/s), with no phase. f_max is a

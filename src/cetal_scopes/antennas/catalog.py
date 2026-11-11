@@ -5,8 +5,9 @@ whichever channel it happens to be plugged into today. So probes are defined
 once, by name, and a bench description only says which name sits on which
 channel (plus the per-installation placement -- cable delay, axis, position).
 
-The catalogue always holds the vendor reference probes (``PBS-H1`` ...
-``PBS-E1``, see :mod:`cetal_scopes.antennas.aaronia.pbs1`). Bench-specific
+The catalogue always holds the vendor reference antennas (``PBS-H1`` ...
+``PBS-E1``, see :mod:`cetal_scopes.antennas.aaronia.pbs1`, and ``USLP-9143``,
+see :mod:`cetal_scopes.antennas.schwarzbeck.uslp9143`). Bench-specific
 probes are added from a TOML file::
 
     [antenna.bdot-large]
@@ -45,6 +46,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from cetal_scopes.antenna import Antenna, TransferFunction
 from cetal_scopes.antennas.aaronia.pbs1 import PBS1_PROBES, pbs1
+from cetal_scopes.antennas.schwarzbeck.uslp9143 import uslp9143
 
 __all__ = [
     "AntennaCatalog",
@@ -56,8 +58,9 @@ __all__ = [
 
 
 def builtin_antennas() -> dict[str, Antenna]:
-    """The vendor reference probes, keyed by their default names."""
-    antennas = (pbs1(probe.model) for probe in PBS1_PROBES.values())
+    """The vendor reference antennas, keyed by their default names."""
+    antennas = [pbs1(probe.model) for probe in PBS1_PROBES.values()]
+    antennas.append(uslp9143())
     return {antenna.name: antenna for antenna in antennas}
 
 

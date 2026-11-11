@@ -26,7 +26,7 @@ viewer, and a Dash/Plotly B-dot web app); they are not part of the library. The
 web app is a uv workspace member (`apps/bdot_web`) with its own `dash`/`plotly`
 dependencies. `Shot` groups captures with per-capture time offsets and is persisted by
 `save_shot` / `load_shot` as a directory of captures plus a `shot.json` index.
-`cetal_scopes.antennas` holds calibrated reference probes (Aaronia PBS1) and
+`cetal_scopes.antennas` holds calibrated reference antennas (Aaronia PBS1, Schwarzbeck USLP 9143) and
 `AntennaCatalog`, which names them alongside bench probes loaded from an
 `antennas.toml`; an `InstrumentSpec`'s `antennas` are attached to every capture
 at fetch, and capture studio's inventory picks them per channel.

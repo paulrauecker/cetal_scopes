@@ -14,6 +14,8 @@
 
 ::: cetal_scopes.antennas.aaronia.pbs1
 
+::: cetal_scopes.antennas.schwarzbeck.uslp9143
+
 ## Antenna catalogue
 
 ::: cetal_scopes.antennas.catalog

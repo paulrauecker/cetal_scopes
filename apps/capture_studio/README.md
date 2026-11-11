@@ -145,7 +145,8 @@ axis = [0.0, 0.0, 1.0]
 
 Names come from an antenna catalogue
 (`cetal_scopes.antennas.AntennaCatalog`). The vendor reference probes
-`PBS-H1` ... `PBS-H4` and `PBS-E1` are always in it; bench probes are defined
+`PBS-H1` ... `PBS-H4`, `PBS-E1` and the Schwarzbeck log-periodic `USLP-9143`
+are always in it; bench probes are defined
 in `antennas.toml`, read from beside `--config` (or from `--antennas PATH`):
 
 ```toml

@@ -34,7 +34,9 @@ kind = "b-dot"
 def test_the_builtin_probes_are_always_there() -> None:
     catalog = AntennaCatalog()
 
-    assert sorted(catalog) == sorted(f"PBS-{model}" for model in PBS1_PROBES)
+    assert sorted(catalog) == sorted(
+        [*(f"PBS-{model}" for model in PBS1_PROBES), "USLP-9143"]
+    )
     h3 = catalog["PBS-H3"]
     assert h3.transfer_function is not None
     assert h3.transfer_function.f_max == 50e6
