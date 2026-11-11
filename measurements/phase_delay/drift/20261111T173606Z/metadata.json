@@ -1,0 +1,57 @@
+{
+  "timestamp": "20261111T173606Z",
+  "label": "drift 1/7: swap-run-3 wiring unchanged (P1+cable1->C3, P2+cable2->C4, P3+cable3->C1)",
+  "mode": "single run, reference C1",
+  "source_power_dbm": 5.0,
+  "frequency_plan_hz": [
+    100000000.0,
+    2000000000.0,
+    50000000.0
+  ],
+  "repeats": 2,
+  "settle_s": 0.2,
+  "scope_settings": {
+    "timebase": 5e-05,
+    "range": 0.01,
+    "offset": 0.0,
+    "coupling": "DC",
+    "impedance": 50,
+    "channels": [
+      "C1",
+      "C3",
+      "C4"
+    ]
+  },
+  "scope_metadata": {
+    "instrument": "Siglent SDS6204L",
+    "address": "192.168.0.11",
+    "idn": "Siglent Technologies,SDS6204L,SDS6LA3CA00028,18.36.11.2.0.3.7",
+    "channels": [
+      "C1",
+      "C3",
+      "C4"
+    ],
+    "sample_width": "WORD",
+    "sample_rate_hz": 4999999933.242841,
+    "record_length": 2500000,
+    "trigger_mode": "AUTO",
+    "trigger_source": null,
+    "trigger_slope": null,
+    "trigger_level_requested_v": null,
+    "trigger_level_v": null,
+    "streaming": false,
+    "timestamp": "2026-11-11T17:36:13.126422+00:00",
+    "channel_range_mv": {
+      "C1": 19.999999552965164,
+      "C3": 19.999999552965164,
+      "C4": 19.999999552965164
+    },
+    "channel_offset_v": {
+      "C1": 0.0,
+      "C3": 0.0,
+      "C4": 0.0
+    }
+  },
+  "demo": false,
+  "duration_s": 416.84603904900723
+}

@@ -1,0 +1,36 @@
+{
+  "reference": "C1",
+  "velocity_factor": 0.85,
+  "channels": {
+    "C2": {
+      "delay_ps": 173.07961920457154,
+      "delay_stderr_ps": 0.7554635379830532,
+      "length_mm": 44.10476980038613,
+      "intercept_deg": 0.38430464393939845,
+      "residual_rms_deg": 0.9287207996733948,
+      "excluded_hz": [
+        1249997866.2267928
+      ]
+    },
+    "C3": {
+      "delay_ps": 31.15666492288566,
+      "delay_stderr_ps": 33.24049426224245,
+      "length_mm": 7.939453186267131,
+      "intercept_deg": 1.395531100293375,
+      "residual_rms_deg": 40.86383638737732,
+      "excluded_hz": [
+        1249997866.2267928
+      ]
+    },
+    "C4": {
+      "delay_ps": 77.559692322953,
+      "delay_stderr_ps": 32.483896374273584,
+      "length_mm": 19.764039182738536,
+      "intercept_deg": 1.9328093424002935,
+      "residual_rms_deg": 39.933721087012685,
+      "excluded_hz": [
+        1249997866.2267928
+      ]
+    }
+  }
+}

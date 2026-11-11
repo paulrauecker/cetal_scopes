@@ -1,0 +1,26 @@
+{
+  "reference": "C1",
+  "velocity_factor": 0.85,
+  "channels": {
+    "C2": {
+      "delay_ps": 171.3854957983885,
+      "delay_stderr_ps": 0.854864923856385,
+      "length_mm": 43.67306719330542,
+      "intercept_deg": 0.53279280025663,
+      "residual_rms_deg": 1.050918807404404,
+      "excluded_hz": [
+        1249997871.5607018
+      ]
+    },
+    "C3": {
+      "delay_ps": 182.435693864137,
+      "delay_stderr_ps": 1.082150079797709,
+      "length_mm": 46.48891832689537,
+      "intercept_deg": -1.1294967561842013,
+      "residual_rms_deg": 1.3303293181843594,
+      "excluded_hz": [
+        1249997871.5607018
+      ]
+    }
+  }
+}
