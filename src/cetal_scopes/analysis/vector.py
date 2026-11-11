@@ -82,11 +82,16 @@ class FieldVector:
 
         When :attr:`axes` is set, the per-axis amplitudes are combined using
         each probe's true orientation, which matters for any triad that is not
-        perfectly orthogonal.
+        perfectly orthogonal. Each probe measures the projection of the field
+        on its axis, ``real = axes @ B``, so the field is the least-squares
+        solution of that system (the exact inverse for three independent
+        axes). With fewer than three independent axes, the result is the
+        component of the field in the plane or line the probes span.
         """
         if self.axes is None:
             return self.real
-        return np.asarray(self.axes.T @ self.real, dtype=np.float64)
+        solution = np.linalg.lstsq(self.axes, self.real, rcond=None)[0]
+        return np.asarray(solution, dtype=np.float64)
 
     @property
     def ellipticity(self) -> float:

@@ -87,12 +87,19 @@ def subtract_baseline(
     -------
     Channel
         Baseline-subtracted channel (raw codes dropped).
+
+    Raises
+    ------
+    ValueError
+        If the window contains no samples, or ``mode`` is unknown.
     """
     region = (
         gate(channel, t_start=t_start, t_end=t_end)
         if t_start is not None or t_end is not None
         else channel
     )
+    if region.n_samples == 0:
+        raise ValueError("the baseline window contains no samples")
     if mode == "mean":
         level = float(np.mean(region.volts))
     elif mode == "median":
@@ -146,8 +153,10 @@ def remove_adc_comb(channel: Channel, *, period: int | None = None) -> Channel:
     if volts.size < period:
         raise ValueError("channel is shorter than one comb period")
     phase = np.arange(volts.size) % period
-    phase_means = np.array(
-        [volts[phase == p].mean() for p in range(period)], dtype=np.float64
+    # One pass over the record; a boolean mask per phase would scan it
+    # ``period`` times.
+    phase_means = np.bincount(phase, weights=volts, minlength=period) / np.bincount(
+        phase, minlength=period
     )
     return with_volts(channel, volts - phase_means[phase] + volts.mean())
 

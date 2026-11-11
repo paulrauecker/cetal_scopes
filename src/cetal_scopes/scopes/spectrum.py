@@ -30,6 +30,7 @@ constraint easy to violate across separate ``configure()`` calls.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -178,7 +179,8 @@ def snap_input_range(volts: float) -> int:
     (and will clip), a request at or below the smallest range gets the most
     sensitive range.
     """
-    millivolts = volts * 1000.0
+    # A little slack, so a request one float ulp above a step still gets it.
+    millivolts = volts * 1000.0 * (1.0 - 1e-9)
     for step in INPUT_RANGES_MV:
         if step >= millivolts:
             return step
@@ -246,6 +248,22 @@ def deinterleave(raw: NDArray[np.int16], n_channels: int) -> NDArray[np.int16]:
     return np.ascontiguousarray(raw.reshape(-1, n_channels).T)
 
 
+def offset_percent(offset_v: float, range_mv: int) -> int:
+    """The ``SPC_OFFSx`` register value for an offset: whole percent of the range."""
+    return round(offset_v / (range_mv / 1000.0) * 100)
+
+
+def applied_offset(offset_v: float, range_mv: int) -> float:
+    """The offset the card really applies, in volts.
+
+    The register only takes whole percent of the range, so a request is
+    quantized to 1 % of it (10 mV on the 1 V range). Every conversion between
+    codes and volts must use this value, not the request: the difference
+    would otherwise appear as a DC error on the whole record.
+    """
+    return offset_percent(offset_v, range_mv) / 100.0 * (range_mv / 1000.0)
+
+
 def codes_to_volts(
     codes: NDArray[Any], range_mv: int, max_adc: int, *, offset_v: float = 0.0
 ) -> NDArray[np.float64]:
@@ -275,8 +293,12 @@ def volts_to_code(
     trigger never fires.
     """
     range_v = range_mv / 1000.0
+    # The range check is made in volts, so that it also works before the card
+    # is connected, when ``max_adc`` is still 0 and every code would be 0.
     code = (level_v + offset_v) / range_v * max_adc
-    if not -max_adc - 1 <= code <= max_adc:
+    if abs(level_v + offset_v) > range_v * (1.0 + 1e-9) or not (
+        -max_adc - 1 <= code <= max_adc
+    ):
         raise ValueError(
             f"trigger level {level_v:g} V is outside the +/-{range_v:g} V "
             f"input range at offset {offset_v:g} V; expected a level in "
@@ -463,6 +485,17 @@ class _PendingAcquisition:
     n_segments: int | None
     n_channels: int
     total_samples: int
+    channels: tuple[str, ...]
+    range_mv: dict[str, int]
+    offset_v: dict[str, float]
+    """The offsets the card applies (see :func:`applied_offset`), in volts."""
+
+    offset_requested_v: dict[str, float]
+    trigger: TriggerSettings
+    trigger_termination_ohm: int
+    reference_clock_hz: float | None
+    sample_rate: float
+    sample_rate_requested: float | None
 
 
 class SpectrumM5i3367(Scope):
@@ -534,6 +567,7 @@ class SpectrumM5i3367(Scope):
         self._reference_clock_hz: float | None = None
         self._segments: int | None = None
         self._armed = False
+        self._complete = False
         self._pending: _PendingAcquisition | None = None
 
     @property
@@ -584,7 +618,9 @@ class SpectrumM5i3367(Scope):
             self._max_adc = self._card.get_i32(SPC_MIINST_MAXADCVALUE)
             self._bytes_per_sample = self._card.get_i32(SPC_MIINST_BYTESPERSAMPLE)
         except Exception:
-            self._connected = False
+            # Release the handle: the device is exclusive, so a handle left
+            # open here would make every later connect() fail.
+            self.close()
             raise
         self._connected = True
 
@@ -595,6 +631,8 @@ class SpectrumM5i3367(Scope):
             if self._owns_card:
                 self._card = None
         self._connected = False
+        self._armed = False
+        self._pending = None
 
     def configure(self, settings: Mapping[str, Any]) -> None:
         """Validate and store acquisition settings; performs no I/O.
@@ -703,6 +741,12 @@ class SpectrumM5i3367(Scope):
         self._range_mv = {ch: self._range_mv.get(ch, 1000) for ch in names}
         self._offset_v = {ch: self._offset_v.get(ch, 0.0) for ch in names}
         self._channels = names
+        # The rate ceiling depends on the channel count, so the request is
+        # clamped again: 10 GS/s asked for with one channel is 5 GS/s with two.
+        if self._sample_rate_requested is not None:
+            self._sample_rate = snap_sample_rate(
+                self._sample_rate_requested, n_channels=len(names)
+            )
 
     def set_sample_rate(self, hertz: float) -> None:
         """Request a sample rate in Hz, clamped to the channel-count ceiling.
@@ -804,7 +848,9 @@ class SpectrumM5i3367(Scope):
                 level,
                 self._range_mv[channel],
                 self._max_adc,
-                offset_v=self._offset_v[channel],
+                offset_v=applied_offset(
+                    self._offset_v[channel], self._range_mv[channel]
+                ),
             ),
         )
 
@@ -890,7 +936,22 @@ class SpectrumM5i3367(Scope):
             n_segments=self._segments,
             n_channels=n_channels,
             total_samples=total_samples,
+            channels=self._channels,
+            range_mv=dict(self._range_mv),
+            offset_v={
+                channel: applied_offset(
+                    self._offset_v[channel], self._range_mv[channel]
+                )
+                for channel in self._channels
+            },
+            offset_requested_v=dict(self._offset_v),
+            trigger=self._trigger,
+            trigger_termination_ohm=self._trigger_termination_ohm,
+            reference_clock_hz=self._reference_clock_hz,
+            sample_rate=self._actual_sample_rate,
+            sample_rate_requested=self._sample_rate_requested,
         )
+        self._complete = False
         self._armed = True
 
     def wait(self, timeout: float | None = None) -> bool:
@@ -904,19 +965,22 @@ class SpectrumM5i3367(Scope):
         if not self._armed:
             raise RuntimeError("wait() called before arm()")
         limit = self._acquire_timeout if timeout is None else timeout
-        timeout_ms = max(1, int(limit * 1000))
+        deadline = time.monotonic() + limit
         # Two commands, as in the vendor's standard-mode example: given
         # WAITREADY | WAITDMA in one command, the card was seen returning
         # once the acquisition ended but mid-DMA, so fetch() read a buffer
-        # whose tail was still the zeros it was allocated with.
+        # whose tail was still the zeros it was allocated with. They share
+        # one deadline, so the call cannot block for twice the timeout.
         try:
-            card.command(M2CMD_CARD_WAITREADY, timeout_ms=timeout_ms)
-            card.command(M2CMD_DATA_WAITDMA, timeout_ms=timeout_ms)
+            card.command(M2CMD_CARD_WAITREADY, timeout_ms=max(1, int(limit * 1000)))
+            remaining = deadline - time.monotonic()
+            card.command(M2CMD_DATA_WAITDMA, timeout_ms=max(1, int(remaining * 1000)))
         except TimeoutError:
             return False
         # The status register, not the wait returning, is what says the
         # whole transfer has landed in the buffer.
-        return bool(card.get_i32(SPC_M2STATUS) & M2STAT_DATA_END)
+        self._complete = bool(card.get_i32(SPC_M2STATUS) & M2STAT_DATA_END)
+        return self._complete
 
     def fetch(self) -> Capture:
         """Return the completed Standard Single acquisition.
@@ -927,15 +991,15 @@ class SpectrumM5i3367(Scope):
             If the card is configured for Multiple Recording (call
             :meth:`fetch_segments`), or if no completed acquisition is pending.
         """
-        if self._segments is not None:
+        pending = self._require_pending()
+        if pending.n_segments is not None:
             raise RuntimeError(
                 "card is configured for Multiple Recording "
-                f"({self._segments} segments); call fetch_segments() "
+                f"({pending.n_segments} segments); call fetch_segments() "
                 "instead of fetch()"
             )
-        pending = self._require_pending()
         codes = self._read_pending(pending)
-        return self._build_capture(codes, pending.pretrigger, segment_index=None)
+        return self._build_capture(codes, pending, segment_index=None)
 
     def fetch_segments(self) -> list[Capture]:
         """Return one capture per segment of the completed Multiple Recording.
@@ -946,12 +1010,12 @@ class SpectrumM5i3367(Scope):
             If the card is not configured for Multiple Recording, or if no
             completed acquisition is pending.
         """
-        if self._segments is None:
+        pending = self._require_pending()
+        if pending.n_segments is None:
             raise RuntimeError(
                 "card is not configured for Multiple Recording; call "
                 "set_segments(n) or pass 'segments' to configure() first"
             )
-        pending = self._require_pending()
         codes_all = self._read_pending(pending)
 
         segment_length = pending.record_length
@@ -962,7 +1026,7 @@ class SpectrumM5i3367(Scope):
             captures.append(
                 self._build_capture(
                     codes_all[:, start:end],
-                    pending.pretrigger,
+                    pending,
                     segment_index=segment,
                 )
             )
@@ -970,7 +1034,11 @@ class SpectrumM5i3367(Scope):
 
     def fetch_all(self) -> list[Capture]:
         """Every capture of the completed acquisition, whatever the card mode."""
-        if self._segments is not None:
+        pending = self._pending
+        segmented = (
+            self._segments if pending is None else pending.n_segments
+        ) is not None
+        if segmented:
             return self.fetch_segments()
         return [self.fetch()]
 
@@ -980,6 +1048,7 @@ class SpectrumM5i3367(Scope):
         Safe when unarmed and when disconnected; never raises.
         """
         self._armed = False
+        self._complete = False
         self._pending = None
         if not self._connected or self._card is None:
             return
@@ -1061,7 +1130,10 @@ class SpectrumM5i3367(Scope):
 
     def _require_pending(self) -> _PendingAcquisition:
         pending = self._pending
-        if not self._armed or pending is None:
+        # ``_complete`` is what wait() saw in the status register. Without
+        # it the DMA buffer is not full: its tail is still the zeros it was
+        # allocated with, and a capture built from it would look like data.
+        if not self._armed or pending is None or not self._complete:
             raise RuntimeError("fetch() called before a completed wait()")
         return pending
 
@@ -1070,6 +1142,7 @@ class SpectrumM5i3367(Scope):
         raw = card.read_buffer(pending.total_samples)
         card.command(M2CMD_DATA_STOPDMA)
         self._armed = False
+        self._complete = False
         self._pending = None
         return deinterleave(raw, pending.n_channels)
 
@@ -1096,8 +1169,10 @@ class SpectrumM5i3367(Scope):
             index = _CHANNEL_INDEX[channel]
             range_mv = self._range_mv[channel]
             card.set_i32(SPC_AMP0 + index * (SPC_AMP1 - SPC_AMP0), range_mv)
-            offset_pct = round(self._offset_v[channel] / (range_mv / 1000.0) * 100)
-            card.set_i32(SPC_OFFS0 + index * (SPC_OFFS1 - SPC_OFFS0), offset_pct)
+            card.set_i32(
+                SPC_OFFS0 + index * (SPC_OFFS1 - SPC_OFFS0),
+                offset_percent(self._offset_v[channel], range_mv),
+            )
 
         # The OR mask defaults to the software trigger; always clear it
         # explicitly before deciding what the real source is (manual p. 104:
@@ -1138,61 +1213,74 @@ class SpectrumM5i3367(Scope):
         self._actual_sample_rate = float(card.get_i64(SPC_SAMPLERATE))
 
     def _build_capture(
-        self, codes: NDArray[np.int16], pretrigger: int, *, segment_index: int | None
+        self,
+        codes: NDArray[np.int16],
+        pending: _PendingAcquisition,
+        *,
+        segment_index: int | None,
     ) -> Capture:
-        dt = 1.0 / self._actual_sample_rate
-        t0 = -pretrigger * dt
+        # Everything comes from ``pending``, the state latched at arm(): a
+        # configure() between arm and fetch must not rescale a record that
+        # was acquired with the old range.
+        dt = 1.0 / pending.sample_rate
+        t0 = -pending.pretrigger * dt
         volts = np.vstack(
             [
                 codes_to_volts(
                     codes[i],
-                    self._range_mv[channel],
+                    pending.range_mv[channel],
                     self._max_adc,
-                    offset_v=self._offset_v[channel],
+                    offset_v=pending.offset_v[channel],
                 )
-                for i, channel in enumerate(self._channels)
+                for i, channel in enumerate(pending.channels)
             ]
         )
-        record_length = codes.shape[1]
         return Capture(
             volts=volts,
             t0=t0,
             dt=dt,
-            channel_names=self._channels,
+            channel_names=pending.channels,
             raw=codes,
             metadata=self._card_metadata(
-                pretrigger=pretrigger,
-                record_length=record_length,
+                pending,
+                record_length=codes.shape[1],
                 segment_index=segment_index,
             ),
         )
 
     def _card_metadata(
-        self, *, pretrigger: int, record_length: int, segment_index: int | None
+        self,
+        pending: _PendingAcquisition,
+        *,
+        record_length: int,
+        segment_index: int | None,
     ) -> dict[str, Any]:
         return {
             "instrument": "Spectrum M5i.3367-x16",
             "device": self._device,
             "product_name": self._product_name,
             "serial_number": self._serial,
-            "sample_rate_hz": self._actual_sample_rate,
+            "sample_rate_hz": pending.sample_rate,
             # What was asked for, so the gap the clock divider opens up is
             # visible: only base/2**n rates exist, so 2 GS/s becomes 1.25.
-            "sample_rate_requested_hz": self._sample_rate_requested,
+            "sample_rate_requested_hz": pending.sample_rate_requested,
             "record_length": record_length,
-            "pretrigger": pretrigger,
-            "posttrigger": record_length - pretrigger,
-            "channel_range_mv": dict(self._range_mv),
-            "channel_offset_v": dict(self._offset_v),
-            "trigger_source": self._trigger.source,
-            "trigger_level_v": self._trigger.level,
-            "trigger_slope": self._trigger.slope,
-            "trigger_termination_ohm": self._trigger_termination_ohm,
+            "pretrigger": pending.pretrigger,
+            "posttrigger": record_length - pending.pretrigger,
+            "channel_range_mv": dict(pending.range_mv),
+            # The applied offset is what the volts were computed with; the
+            # register quantizes a request to 1 % of the range.
+            "channel_offset_v": dict(pending.offset_v),
+            "channel_offset_requested_v": dict(pending.offset_requested_v),
+            "trigger_source": pending.trigger.source,
+            "trigger_level_v": pending.trigger.level,
+            "trigger_slope": pending.trigger.slope,
+            "trigger_termination_ohm": pending.trigger_termination_ohm,
             # None: the card's internal reference.
-            "reference_clock_hz": self._reference_clock_hz,
+            "reference_clock_hz": pending.reference_clock_hz,
             "max_adc_value": self._max_adc,
             "bytes_per_sample": self._bytes_per_sample,
-            "segments": self._segments,
+            "segments": pending.n_segments,
             "segment_index": segment_index,
             "timestamp": datetime.now(UTC).isoformat(),
         }

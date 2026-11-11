@@ -148,3 +148,22 @@ def test_a_negative_frequency_is_rejected() -> None:
 def test_a_reference_outside_the_channels_is_rejected() -> None:
     with pytest.raises(ValueError, match="is not one of the channels"):
         vector_at(make_capture((1.0, 1.0, 1.0)), FREQ, reference="C9")
+
+
+def test_lab_vector_inverts_a_non_orthogonal_triad() -> None:
+    from cetal_scopes.analysis import FieldVector
+
+    axes = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [np.cos(np.radians(60.0)), np.sin(np.radians(60.0)), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    field = np.array([1.0, 2.0, 3.0])
+    # Each probe measures the projection of the field on its own axis.
+    measured = (axes @ field).astype(np.complex128)
+    vector = FieldVector(
+        frequency=1e6, components=measured, channels=("a", "b", "c"), axes=axes
+    )
+    np.testing.assert_allclose(vector.lab_vector, field, atol=1e-12)

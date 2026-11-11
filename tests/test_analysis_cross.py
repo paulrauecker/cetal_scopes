@@ -123,3 +123,11 @@ def test_a_silent_input_gives_nan_gain_rather_than_a_huge_number() -> None:
 
     _, gain = transfer_function(quiet, loud)
     assert np.isnan(gain).all()
+
+
+def test_coherence_is_labelled_dimensionless() -> None:
+    rng = np.random.default_rng(0)
+    volts = rng.standard_normal(1024)
+    a = Channel(name="a", volts=volts, t0=0.0, dt=1e-9)
+    result = coherence(a, a)
+    assert (result.amplitude_unit, result.psd_unit) == ("1", "1")

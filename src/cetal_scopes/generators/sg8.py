@@ -230,7 +230,11 @@ class SG8SignalGenerator:
         try:
             self._idn = self._query("*IDN?")
         except Exception:
+            # Do not keep the serial port open behind a failed connect(). Only
+            # the transport: close() would also write ``OUTPut 0`` to a link
+            # that has just failed to answer.
             self._connected = False
+            self._close_transport()
             raise
         _install_termination_handlers()
         atexit.register(self.close)

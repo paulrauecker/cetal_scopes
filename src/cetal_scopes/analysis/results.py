@@ -7,7 +7,15 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["ChannelStats", "Spectrogram", "Spectrum", "TimeOffset", "Tone"]
+__all__ = [
+    "ChannelStats",
+    "Peak",
+    "PulseMetrics",
+    "Spectrogram",
+    "Spectrum",
+    "TimeOffset",
+    "Tone",
+]
 
 
 @dataclass(frozen=True, eq=False)

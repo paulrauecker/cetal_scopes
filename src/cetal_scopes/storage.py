@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,29 @@ SHOT_INDEX = "shot.json"
 
 def _json_path(path: str | os.PathLike[str]) -> Path:
     resolved = Path(path)
-    return resolved if resolved.suffix == ".json" else resolved.with_suffix(".json")
+    if resolved.suffix == ".json":
+        return resolved
+    # Append, do not replace: ``with_suffix`` would turn ``run_2026.11.06``
+    # into ``run_2026.11.json`` and let two different stems share one file.
+    return resolved.with_name(resolved.name + ".json")
+
+
+def _jsonable(value: Any) -> Any:
+    """Turn NumPy scalars and arrays in free-form metadata into plain Python.
+
+    Drivers and analysis code routinely leave a ``numpy.float64`` or a
+    ``numpy.int64`` in a metadata dictionary, and the JSON writer accepts
+    neither.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 def _sidecar_path(json_path: Path, suffix: str) -> Path:
@@ -98,8 +121,9 @@ def save_capture(capture: Capture, path: str | os.PathLike[str]) -> Path:
     capture : Capture
         The capture to persist.
     path : str or path-like
-        Target JSON path. A missing ``.json`` suffix is appended, and the
-        sidecars are placed next to it with ``.volts.npy`` / ``.raw.npy``.
+        Target JSON path. A missing ``.json`` suffix is appended (a dot in
+        the stem is kept), and the sidecars are placed next to it with
+        ``.volts.npy`` / ``.raw.npy``.
 
     Returns
     -------
@@ -114,11 +138,7 @@ def save_capture(capture: Capture, path: str | os.PathLike[str]) -> Path:
     if names is None:  # pragma: no cover - always set by Capture
         raise RuntimeError("capture has no channel names")
 
-    _write_array_atomic(volts_path, capture.volts)
-    raw_sidecar: str | None = None
-    if capture.raw is not None:
-        _write_array_atomic(raw_path, capture.raw)
-        raw_sidecar = raw_path.name
+    raw_sidecar = None if capture.raw is None else raw_path.name
 
     channels: list[ChannelMetadata] = []
     for name in names:
@@ -144,9 +164,16 @@ def save_capture(capture: Capture, path: str | os.PathLike[str]) -> Path:
         volts_sidecar=volts_path.name,
         raw_sidecar=raw_sidecar,
         channels=channels,
-        metadata=dict(capture.metadata),
+        metadata=_jsonable(capture.metadata),
     )
-    _write_text_atomic(json_path, file.model_dump_json(indent=2) + "\n")
+    # Serialize before any file is written: metadata that cannot be encoded
+    # must fail here, not after the sidecars are already on disk.
+    text = file.model_dump_json(indent=2) + "\n"
+
+    _write_array_atomic(volts_path, capture.volts)
+    if capture.raw is not None:
+        _write_array_atomic(raw_path, capture.raw)
+    _write_text_atomic(json_path, text)
     return json_path
 
 
@@ -244,8 +271,12 @@ def _label_to_stem(label: str) -> str:
         character if character.isalnum() or character in "-_." else "_"
         for character in label
     )
-    stem = stem.strip("._")
-    return stem or "capture"
+    stem = stem.strip("._") or "capture"
+    if f"{stem}.json".lower() == SHOT_INDEX:
+        # ``shot.json`` is the index; a capture with that stem would be
+        # overwritten by it.
+        stem += "_capture"
+    return stem
 
 
 def save_shot(shot: Shot, path: str | os.PathLike[str]) -> Path:
@@ -274,6 +305,8 @@ def save_shot(shot: Shot, path: str | os.PathLike[str]) -> Path:
     """
     if not shot.captures:
         raise ValueError("cannot save a shot with no captures")
+    # Fail on metadata that cannot be encoded before any capture is written.
+    ShotFile(metadata=_jsonable(shot.metadata)).model_dump_json()
 
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
@@ -300,7 +333,7 @@ def save_shot(shot: Shot, path: str | os.PathLike[str]) -> Path:
     file = ShotFile(
         reference=shot.reference,
         captures=entries,
-        metadata=dict(shot.metadata),
+        metadata=_jsonable(shot.metadata),
     )
     index = directory / SHOT_INDEX
     _write_text_atomic(index, file.model_dump_json(indent=2) + "\n")

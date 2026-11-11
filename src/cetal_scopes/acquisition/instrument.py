@@ -40,13 +40,15 @@ class InstrumentSpec:
     required : bool, optional
         Whether this instrument failing makes the shot incomplete.
     fetch_on_timeout : bool, optional
-        Read the instrument's buffer even though no trigger arrived. **Off by
+        Read the instrument's buffer even though no trigger arrived, through
+        :meth:`~cetal_scopes.scopes.base.Scope.fetch_untriggered`. **Off by
         default, deliberately**: an untriggered scope still holds the
         *previous* shot's waveform, so this yields a well-formed capture that
         is silently from the wrong event -- and time alignment will happily fit
         an offset to it. Any capture obtained this way is marked
         ``metadata["untriggered"] = True`` and the instrument is still reported
-        as ``"timeout"``, never ``"ok"``.
+        as ``"timeout"``, never ``"ok"``. A driver with nothing to read
+        without a trigger (the M5i) contributes no capture.
     antennas : mapping of str to Antenna, optional
         The sensor on each channel, by channel name. Attached to every capture
         this instrument returns, so a saved shot records which probe took
@@ -148,6 +150,10 @@ class AsyncScope:
     async def fetch_all(self) -> list[Capture]:
         """Transfer every capture of the completed acquisition."""
         return await self._call(self._scope.fetch_all)
+
+    async def fetch_untriggered(self) -> list[Capture]:
+        """Read the buffer of an instrument that did not trigger."""
+        return await self._call(self._scope.fetch_untriggered)
 
     async def force_trigger(self) -> None:
         """Trigger the armed instrument in software."""

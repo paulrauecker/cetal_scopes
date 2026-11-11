@@ -311,3 +311,46 @@ def test_a_traversing_capture_reference_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="bare filename"):
         load_shot(index)
+
+
+def test_a_dot_in_the_stem_is_kept(tmp_path: Path) -> None:
+    first = save_capture(make_capture(), tmp_path / "run_2026.11.06")
+    second = save_capture(make_capture(), tmp_path / "run_2026.11.07")
+
+    assert first.name == "run_2026.11.06.json"
+    assert second.name == "run_2026.11.07.json"
+    assert (tmp_path / "run_2026.11.06.volts.npy").is_file()
+    assert load_capture(tmp_path / "run_2026.11.06").n_samples > 0
+
+
+def test_numpy_values_in_metadata_are_saved(tmp_path: Path) -> None:
+    capture = make_capture()
+    capture.metadata.update(
+        {"gain": np.float64(1.5), "count": np.int64(3), "axis": np.arange(3)}
+    )
+    loaded = load_capture(save_capture(capture, tmp_path / "np"))
+
+    assert loaded.metadata["gain"] == 1.5
+    assert loaded.metadata["count"] == 3
+    assert loaded.metadata["axis"] == [0, 1, 2]
+
+
+def test_metadata_that_cannot_be_saved_leaves_no_files(tmp_path: Path) -> None:
+    capture = make_capture()
+    capture.metadata["handle"] = object()
+    with pytest.raises(Exception, match="serialize"):
+        save_capture(capture, tmp_path / "bad")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_capture_labelled_shot_does_not_collide_with_the_index(
+    tmp_path: Path,
+) -> None:
+    shot = Shot()
+    shot.add("shot", make_capture())
+    shot.add("other", make_capture())
+    save_shot(shot, tmp_path / "s")
+
+    loaded = load_shot(tmp_path / "s")
+    assert list(loaded) == ["shot", "other"]
+    assert (tmp_path / "s" / "shot_capture.json").is_file()

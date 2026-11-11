@@ -32,7 +32,10 @@ def plot_capture(
     ax: Axes | None = None,
     time_unit: str = "s",
 ) -> Axes:
-    """Plot each channel's voltage against time.
+    """Plot each channel's signal against time.
+
+    The y-axis label shows the channels' units, so a calibrated channel in
+    ``T`` is not labelled as volts.
 
     Parameters
     ----------
@@ -60,11 +63,17 @@ def plot_capture(
         names = capture.channel_names or ()
     else:
         names = tuple(channels)
+    units: list[str] = []
     for name in names:
         channel = capture[name]
         ax.plot(channel.time * scale, channel.volts, label=name)
+        if channel.unit not in units:
+            units.append(channel.unit)
     ax.set_xlabel(f"time ({time_unit})")
-    ax.set_ylabel("volts (V)")
+    if units in ([], ["V"]):
+        ax.set_ylabel("volts (V)")
+    else:
+        ax.set_ylabel(f"signal ({', '.join(units)})")
     if len(names) > 1:
         ax.legend()
     return ax

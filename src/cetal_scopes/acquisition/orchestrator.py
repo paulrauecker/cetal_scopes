@@ -245,8 +245,18 @@ class MultiScopeAcquisition:
         await self.aclose()
 
     async def reconfigure(self, label: str, settings: Mapping[str, Any]) -> None:
-        """Apply new settings to one instrument between shots."""
-        await self._scopes[label].configure(settings)
+        """Apply new settings to one instrument between shots.
+
+        Raises
+        ------
+        RuntimeError
+            If a shot is in progress: settings that change between arm and
+            fetch would make the capture disagree with its own metadata.
+        """
+        if self._shot_lock.locked():
+            raise RuntimeError("cannot reconfigure an instrument during a shot")
+        async with self._shot_lock:
+            await self._scopes[label].configure(settings)
 
     # -- events ------------------------------------------------------------
 
@@ -462,6 +472,10 @@ class MultiScopeAcquisition:
                     states[spec.label], state="error", error=repr(exc)
                 )
                 self._instrument(spec.label, "error", error=repr(exc))
+                # It is still armed, and the wait phase skips an instrument
+                # in the error state: disarm it here, or the next shot's
+                # arm() finds it "already armed".
+                await self._scopes[spec.label].abort()
                 continue
             states[spec.label] = replace(states[spec.label], forced=True)
 
@@ -552,10 +566,19 @@ class MultiScopeAcquisition:
         states[label] = replace(states[label], state="fetching")
         self._instrument(label, "fetching")
         try:
-            captures = await self._scopes[label].fetch_all()
+            if untriggered:
+                captures = await self._scopes[label].fetch_untriggered()
+            else:
+                captures = await self._scopes[label].fetch_all()
         except BaseException as exc:  # noqa: BLE001 - reported, not raised
-            states[label] = replace(states[label], state="error", error=repr(exc))
-            self._instrument(label, "error", error=repr(exc))
+            # An unreadable buffer after a timeout is still a timeout: the
+            # instrument did not fail, it had nothing to give.
+            state: InstrumentState = "timeout" if untriggered else "error"
+            error = (
+                f"no trigger; buffer not read: {exc!r}" if untriggered else repr(exc)
+            )
+            states[label] = replace(states[label], state=state, error=error)
+            self._instrument(label, state, error=error)
             await self._scopes[label].abort()
             return
         captures = [spec.annotate(capture) for capture in captures]

@@ -36,8 +36,8 @@ dev = [
 
 
 [tool.pytest.ini_options]
-addopts = "-ra --cov=cetal_scopes --cov-report=term-missing"
-markers = ["hardware: requires a physical instrument (deselect with -m 'not hardware')"]
+addopts = "-ra --cov=cetal_scopes --cov-report=term-missing -m 'not hardware'"
+markers = ["hardware: requires a physical instrument (deselected by default; run with -m hardware)"]
 testpaths = ["tests", "apps"]
 pythonpath = [
     "apps/realtime_viewer",

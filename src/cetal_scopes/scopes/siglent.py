@@ -23,7 +23,6 @@ from cetal_scopes.capture import Capture
 from cetal_scopes.scopes._settings import (
     PHYSICAL_KEYS,
     normalize_physical,
-    pretrigger_samples,
 )
 from cetal_scopes.scopes.base import Scope
 
@@ -204,7 +203,8 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
     Raises
     ------
     ValueError
-        If the payload is too short to contain the descriptor.
+        If the payload is too short to contain the descriptor, or its
+        timebase index is not in :data:`TDIV_ENUM`.
     """
     descriptor = raw
     if len(descriptor) < _WAVEDESC_LENGTH:
@@ -217,7 +217,14 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
         values[name] = struct.unpack_from(f"<{fmt}", descriptor, offset)[0]
 
     tdiv_index = int(values["tdiv_index"])
-    timebase = TDIV_ENUM[tdiv_index] if tdiv_index < len(TDIV_ENUM) else 1e-3
+    if not 0 <= tdiv_index < len(TDIV_ENUM):
+        # The time origin is computed from this; a guessed timebase would
+        # give a wrong ``t0`` with no sign that anything was off.
+        raise ValueError(
+            f"WAVEDESC timebase index {tdiv_index} is outside the known "
+            f"table (0..{len(TDIV_ENUM) - 1})"
+        )
+    timebase = TDIV_ENUM[tdiv_index]
 
     return WaveDesc(
         comm_type=int(values["comm_type"]),
@@ -232,7 +239,11 @@ def parse_wavedesc(raw: bytes) -> WaveDesc:
         voffset=float(values["voffset"]),
         code_per_div=float(values["code_per_div"]),
         adc_bit=int(values["adc_bit"]),
-        interval=float(values["interval"]),
+        # The field is a float32. Its shortest decimal form recovers the
+        # value the scope meant (2e-10), where the widened binary value
+        # (2.000000027e-10) would give a 4,999,999,933 Hz sample rate that
+        # equals no other instrument's.
+        interval=float(str(np.float32(values["interval"]))),
         delay=float(values["delay"]),
         tdiv_index=tdiv_index,
         probe=float(values["probe"]),
@@ -289,10 +300,17 @@ VDIV_LADDER: tuple[float, ...] = (
 )
 
 
+#: Relative slack when a requested value is compared with a ladder step. A
+#: request computed in floating point (``25000 / 5e9 / 10``) can land one ulp
+#: above the step it means (``5e-7``); without the slack it would snap to the
+#: *next* step and double the window.
+_SNAP_RTOL = 1e-9
+
+
 def snap_vdiv(value: float) -> float:
     """Snap ``value`` up to the next valid V/div step (clamped to the ends)."""
     for step in VDIV_LADDER:
-        if step >= value:
+        if step >= value * (1.0 - _SNAP_RTOL):
             return step
     return VDIV_LADDER[-1]
 
@@ -300,7 +318,7 @@ def snap_vdiv(value: float) -> float:
 def snap_timebase(seconds_per_div: float) -> float:
     """Snap ``seconds_per_div`` up to the next valid s/div step in :data:`TDIV_ENUM`."""
     for step in TDIV_ENUM:
-        if step >= seconds_per_div:
+        if step >= seconds_per_div * (1.0 - _SNAP_RTOL):
             return step
     return TDIV_ENUM[-1]
 
@@ -428,6 +446,33 @@ def _normalize_channel(channel: str) -> str:
     return name
 
 
+def _normalize_trigger_source(source: object) -> str:
+    """Spell an analog-channel trigger source the way the scope does.
+
+    ``"CH1"`` and ``"C1"`` are equivalent everywhere else in this driver, and
+    the scope only understands the second. Any other source (``EX``, ``EX5``,
+    ``LINE``, ...) is passed through as SCPI.
+    """
+    token = str(source).strip()
+    try:
+        return _normalize_channel(token)
+    except ValueError:
+        return token
+
+
+def _normalize_channel_keys(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Return ``settings`` with every per-channel mapping keyed ``C1``..``C4``."""
+    normalized = dict(settings)
+    for key in ("range", "offset", "coupling", "impedance", "vertical"):
+        value = normalized.get(key)
+        if isinstance(value, Mapping):
+            normalized[key] = {
+                _normalize_channel(str(channel)): item
+                for channel, item in value.items()
+            }
+    return normalized
+
+
 def _normalize_channels(channels: Sequence[str]) -> tuple[str, ...]:
     names = tuple(_normalize_channel(channel) for channel in channels)
     if not names:
@@ -438,6 +483,20 @@ def _normalize_channels(channels: Sequence[str]) -> tuple[str, ...]:
 
 
 _VALID_SAMPLE_WIDTHS = ("BYTE", "WORD")
+
+#: ``*ESR?`` bits that mean a write did not take effect.
+_ESR_BITS = {
+    4: "query error",
+    8: "device-dependent error",
+    16: "execution error",
+    32: "command error",
+}
+_ESR_ERROR_BITS = 16 | 32
+
+
+def _describe_event_status(status: int) -> str:
+    names = [name for bit, name in _ESR_BITS.items() if status & bit]
+    return ", ".join(names) if names else "no error"
 
 
 def _normalize_sample_width(width: str) -> str:
@@ -561,6 +620,7 @@ class _SocketTransport:
         self._timeout = timeout
         self._socket: socket.socket | None = None
         self._buffer = bytearray()
+        self._reopen = False
 
     def open(self) -> None:
         if self._socket is not None:
@@ -569,26 +629,58 @@ class _SocketTransport:
             (self._host, self._port), timeout=self._timeout
         )
         self._buffer.clear()
+        self._reopen = False
 
     def write(self, command: str) -> None:
         sock = self._require_socket()
-        sock.sendall((command + "\n").encode("ascii"))
+        try:
+            sock.sendall((command + "\n").encode("ascii"))
+        except OSError:
+            self._drop()
+            raise
 
     def query(self, command: str) -> str:
         self.write(command)
-        return self._read_line()
+        try:
+            return self._read_line()
+        except OSError:
+            self._drop()
+            raise
 
     def query_block(self, command: str) -> bytes:
         self.write(command)
-        return self._read_block()
+        try:
+            return self._read_block()
+        except (OSError, ValueError):
+            self._drop()
+            raise
 
     def close(self) -> None:
         if self._socket is not None:
             self._socket.close()
             self._socket = None
         self._buffer.clear()
+        self._reopen = False
+
+    def _drop(self) -> None:
+        """Discard a connection whose reply stream can no longer be trusted.
+
+        After a timeout the reply is still on its way. Left on the socket it
+        would be read as the answer to the *next* query, and every query after
+        that would be one reply behind. There is no way to resynchronize a
+        plain byte stream, so the connection is closed and the next command
+        opens a new one; instrument settings live in the scope, not in the
+        connection, so nothing is lost.
+        """
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+        self._buffer.clear()
+        self._reopen = True
 
     def _require_socket(self) -> socket.socket:
+        if self._socket is None and self._reopen:
+            self.open()
         if self._socket is None:
             raise RuntimeError("transport is not open")
         return self._socket
@@ -761,6 +853,11 @@ class SiglentSDS6204L(Scope):
         when no trigger signal is present.
     grid_num : int, optional
         Horizontal grid divisions; ``10`` for SDS benchtop models.
+    check_errors : bool, optional
+        Read ``*ESR?`` at the end of :meth:`configure` and raise when the
+        instrument rejected a setting. Defaults to ``True``; a setting write
+        is not acknowledged in any other way, so without this a rejected one
+        is silent.
     transport : _Transport, optional
         Injectable transport, primarily for tests.
     """
@@ -780,6 +877,7 @@ class SiglentSDS6204L(Scope):
         acquire_timeout: float = 10.0,
         trigger_mode: str = "SINGle",
         grid_num: int = GRID_NUM,
+        check_errors: bool = True,
         transport: _Transport | None = None,
     ) -> None:
         self._address = address
@@ -807,7 +905,10 @@ class SiglentSDS6204L(Scope):
         self._last_memory_depth: str | None = None
         self._last_delay: float = 0.0
         self._last_acquisition_plan: AcquisitionPlan | None = None
+        self._last_pretrigger: int | float | None = None
+        self._check_errors = check_errors
         self._armed = False
+        self._complete = False
         self._arm_count: int | None = None
         self._trigger_mode_dirty = False
         self._poll_interval = 0.05
@@ -876,7 +977,8 @@ class SiglentSDS6204L(Scope):
         try:
             self._idn = self._query("*IDN?")
         except Exception:
-            self._connected = False
+            # Do not leave a half-open connection behind a failed connect().
+            self.close()
             raise
 
     def close(self) -> None:
@@ -887,6 +989,9 @@ class SiglentSDS6204L(Scope):
                 self._transport = None
         self._connected = False
         self._running = False
+        self._armed = False
+        self._complete = False
+        self._arm_count = None
 
     def configure(self, settings: Mapping[str, Any]) -> None:
         """Apply acquisition settings.
@@ -905,6 +1010,13 @@ class SiglentSDS6204L(Scope):
         key with the panel key it aliases in one call (e.g. ``sample_rate``
         with ``timebase``, or ``range`` with ``vertical[ch]["scale"]`` for
         the same channel) raises :class:`ValueError`.
+
+        The trigger is written last, after the vertical settings, because the
+        scope clamps the trigger level to the source channel's range at the
+        time of the write. Unless the driver was built with
+        ``check_errors=False``, a setting the instrument rejects (``*ESR?``
+        execution or command error) raises :class:`ValueError` at the end of
+        the call.
         """
         unknown = set(settings) - _CONFIG_KEYS
         if unknown:
@@ -913,11 +1025,38 @@ class SiglentSDS6204L(Scope):
                 f"subset of {sorted(_CONFIG_KEYS)!r}"
             )
 
-        if "channels" in settings:
-            self._channels = _normalize_channels(settings["channels"])
+        # Validate everything that can be validated before any state changes,
+        # so a rejected call leaves the driver as it was.
+        channels = (
+            _normalize_channels(settings["channels"])
+            if "channels" in settings
+            else self._channels
+        )
+        settings = _normalize_channel_keys(settings)
+        _check_physical_panel_conflicts(settings, channels)
+        physical = normalize_physical(settings, channels=channels)
+        trigger = settings.get("trigger")
+        if trigger is not None and not isinstance(trigger, Mapping):
+            raise TypeError("trigger must be a mapping")
+        vertical = settings.get("vertical")
+        if vertical is not None:
+            if not isinstance(vertical, Mapping):
+                raise TypeError("vertical must be a mapping")
+            for channel, params in vertical.items():
+                if not isinstance(params, Mapping):
+                    raise TypeError(f"vertical[{channel!r}] must be a mapping")
+        interpolation = (
+            _normalize_interpolation(settings["interpolation"])
+            if "interpolation" in settings
+            else self._interpolation
+        )
 
-        _check_physical_panel_conflicts(settings, self._channels)
-        physical = normalize_physical(settings, channels=self._channels)
+        self._channels = channels
+        self._interpolation = interpolation
+        if self._check_errors:
+            # Reading clears the register, so that the check at the end sees
+            # only the errors of this call.
+            self.event_status()
 
         if "timebase" in settings or "delay" in settings:
             self.set_timebase(
@@ -925,8 +1064,6 @@ class SiglentSDS6204L(Scope):
             )
         if "acquire_type" in settings:
             self.set_acquire_type(str(settings["acquire_type"]))
-        if "interpolation" in settings:
-            self._interpolation = _normalize_interpolation(settings["interpolation"])
         self.set_interpolation(self._interpolation)
         # Before memory_depth: in AUTO the instrument ignores depth writes.
         if "memory_management" in settings:
@@ -936,23 +1073,8 @@ class SiglentSDS6204L(Scope):
         if "trigger_mode" in settings:
             self._trigger_mode = str(settings["trigger_mode"])
 
-        trigger = settings.get("trigger")
-        if trigger is not None:
-            if not isinstance(trigger, Mapping):
-                raise TypeError("trigger must be a mapping")
-            self.set_edge_trigger(
-                source=trigger.get("source"),
-                level=trigger.get("level"),
-                slope=trigger.get("slope"),
-            )
-
-        vertical = settings.get("vertical")
         if vertical is not None:
-            if not isinstance(vertical, Mapping):
-                raise TypeError("vertical must be a mapping")
             for channel, params in vertical.items():
-                if not isinstance(params, Mapping):
-                    raise TypeError(f"vertical[{channel!r}] must be a mapping")
                 self.set_channel(
                     str(channel),
                     scale=params.get("scale"),
@@ -984,7 +1106,7 @@ class SiglentSDS6204L(Scope):
             ):
                 if mapping:
                     touched |= set(mapping)
-            for channel in touched:
+            for channel in sorted(touched):
                 self.set_channel(
                     channel,
                     scale=(
@@ -1002,6 +1124,31 @@ class SiglentSDS6204L(Scope):
                         else None
                     ),
                 )
+
+        # Last, after every vertical setting: the scope clamps the trigger
+        # level to the source channel's range *at the time of the write*, so
+        # a level written before a larger range would be clamped against the
+        # old one and stay there.
+        if trigger is not None:
+            self.set_edge_trigger(
+                source=trigger.get("source"),
+                level=trigger.get("level"),
+                slope=trigger.get("slope"),
+            )
+
+        if self._check_errors:
+            self._raise_on_rejected_setting()
+
+    def _raise_on_rejected_setting(self) -> None:
+        """Raise if the instrument latched an error since ``*ESR?`` was last read."""
+        status = self.event_status()
+        if status & _ESR_ERROR_BITS:
+            raise ValueError(
+                "the instrument rejected at least one setting of this "
+                f"configure() call (*ESR? = {status}: "
+                f"{_describe_event_status(status)}); the other settings were "
+                "applied. Pass check_errors=False to the driver to ignore this"
+            )
 
     def set_acquisition(
         self,
@@ -1021,7 +1168,9 @@ class SiglentSDS6204L(Scope):
 
         ``pretrigger`` alone is valid once a window has already been
         established (by this call or an earlier one); it is a sample count
-        (``int``) or a fraction of the record (``float`` in ``[0, 1]``).
+        at the requested rate (``int``) or a fraction of the acquired window
+        (``float`` in ``[0, 1]``). It is remembered: a later call that only
+        changes the window keeps the trigger at the same place in it.
 
         Returns
         -------
@@ -1071,14 +1220,36 @@ class SiglentSDS6204L(Scope):
             self._last_memory_depth = depth_label
 
         if pretrigger is not None:
-            if self._last_window_s is None or self._last_record_length is None:
+            if self._last_window_s is None or self._last_sample_rate is None:
                 raise ValueError(
                     "pretrigger requires sample_rate and record_length to "
                     "have been set first (in this call or an earlier one)"
                 )
-            pretrig_samples = pretrigger_samples(pretrigger, self._last_record_length)
-            fraction = pretrig_samples / self._last_record_length
-            delay = self._last_window_s * (0.5 - fraction)
+            self._last_pretrigger = pretrigger
+
+        # Also when only the window changed: the delay is an absolute time,
+        # so a delay kept from the old window would move the trigger to a
+        # different fraction of the new one.
+        spec = self._last_pretrigger
+        if (
+            spec is not None
+            and self._last_window_s is not None
+            and self._last_sample_rate is not None
+        ):
+            # The window is snapped up to the timebase ladder, so it can be
+            # longer than record_length / sample_rate. A fraction refers to
+            # the window that is actually acquired; a sample count is a time
+            # at the requested rate, whatever the window became.
+            if isinstance(spec, float):
+                before_trigger = spec * self._last_window_s
+            else:
+                before_trigger = spec / self._last_sample_rate
+            if before_trigger > self._last_window_s * (1.0 + _SNAP_RTOL):
+                raise ValueError(
+                    f"pretrigger of {spec!r} samples is longer than the "
+                    f"{self._last_window_s:g} s acquisition window"
+                )
+            delay = self._last_window_s / 2.0 - before_trigger
             self.set_timebase(delay=delay)
             self._last_delay = delay
 
@@ -1140,8 +1311,9 @@ class SiglentSDS6204L(Scope):
         """Configure an edge trigger."""
         self._write(":TRIGger:TYPE EDGE")
         if source is not None:
+            source = _normalize_trigger_source(source)
             self._write(f":TRIGger:EDGE:SOURce {source}")
-            self._trigger_source = str(source)
+            self._trigger_source = source
         if level is not None:
             self._write(f":TRIGger:EDGE:LEVel {float(level):.6g}")
             self._trigger_level = float(level)
@@ -1252,6 +1424,7 @@ class SiglentSDS6204L(Scope):
             self._trigger_mode_dirty = False
             self._arm_count = self._acquisition_count()
             self._write(":TRIGger:RUN")
+        self._complete = False
         self._armed = True
 
     def wait(self, timeout: float | None = None) -> bool:
@@ -1266,6 +1439,7 @@ class SiglentSDS6204L(Scope):
         deadline = time.monotonic() + limit
         while True:
             if self._acquisition_count() > self._arm_count:
+                self._complete = True
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1280,13 +1454,41 @@ class SiglentSDS6204L(Scope):
         Capture
             Voltage and raw-code arrays shaped ``(n_channels, n_samples)``,
             sharing the first channel's timebase.
+
+        Raises
+        ------
+        RuntimeError
+            If not armed, or if :meth:`wait` has not yet returned ``True``.
+            The scope's memory then still holds the *previous* acquisition;
+            :meth:`fetch_untriggered` reads it deliberately.
+        """
+        self._require_connected()
+        if not self._armed or not self._complete:
+            raise RuntimeError("fetch() called before a completed wait()")
+        return self._read_capture()
+
+    def fetch_untriggered(self) -> list[Capture]:
+        """Read the scope's memory although no trigger arrived, and disarm.
+
+        The waveform that comes back is the one from the previous trigger,
+        not from this arm.
+
+        Raises
+        ------
+        RuntimeError
+            If the scope is not armed.
         """
         self._require_connected()
         if not self._armed:
-            raise RuntimeError("fetch() called before a completed wait()")
+            raise RuntimeError("fetch_untriggered() requires an armed scope")
+        return [self._read_capture()]
+
+    def _read_capture(self) -> Capture:
+        """Stop the scope (unless streaming), disarm, and transfer the channels."""
         if not self._streaming:
             self._write(":TRIGger:STOP")
         self._armed = False
+        self._complete = False
         self._arm_count = None
 
         volts_rows: list[NDArray[np.float64]] = []
@@ -1331,6 +1533,7 @@ class SiglentSDS6204L(Scope):
     def abort(self) -> None:
         """Disarm and stop the scope. Safe when unarmed or disconnected."""
         self._armed = False
+        self._complete = False
         self._arm_count = None
         if not self._connected or self._transport is None:
             return

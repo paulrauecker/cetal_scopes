@@ -30,6 +30,14 @@ __all__ = ["b_field", "b_field_rate", "b_magnitude"]
 
 OutsideMode = Literal["raise", "zero", "clamp"]
 
+#: Gain unit of a derivative magnetic sensor, the only one these functions
+#: can turn into ``T/s`` and ``T``.
+B_DOT_GAIN_UNIT = "V/(T/s)"
+
+#: Largest timebase mismatch :func:`b_magnitude` accepts, as a fraction of the
+#: sample interval.
+_TIMEBASE_RTOL = 1.0e-6
+
 
 def _transfer_function(channel: Channel) -> TransferFunction:
     antenna = channel.antenna
@@ -37,7 +45,14 @@ def _transfer_function(channel: Channel) -> TransferFunction:
         raise ValueError(
             f"channel {channel.name!r} has no antenna with a transfer function"
         )
-    return antenna.transfer_function
+    transfer = antenna.transfer_function
+    if transfer.unit != B_DOT_GAIN_UNIT:
+        raise ValueError(
+            f"channel {channel.name!r}: antenna {antenna.name!r} has a gain in "
+            f"{transfer.unit!r}, not {B_DOT_GAIN_UNIT!r}; it is not a B-dot "
+            "sensor, so its volts cannot be converted to a magnetic field"
+        )
+    return transfer
 
 
 def _calibrate(
@@ -115,7 +130,9 @@ def b_field_rate(
     Parameters
     ----------
     channel : Channel
-        B-dot channel carrying an antenna with a transfer function.
+        B-dot channel carrying an antenna with a transfer function in
+        ``V/(T/s)``. An antenna with a gain in another unit (an E-field
+        antenna, a D-dot probe) raises :class:`ValueError`.
     outside : {"raise", "zero", "clamp"}
         How to treat frequency bins outside the calibrated band. ``"raise"``
         (default) errors when more than ``rtol`` of the signal energy is
@@ -183,10 +200,13 @@ def b_magnitude(*channels: Channel) -> Channel:
     n_samples = first.n_samples
     total = np.zeros(n_samples, dtype=np.float64)
     for channel in channels:
+        # Tolerances are relative to the sample interval. numpy's default
+        # absolute tolerance (1e-8) is larger than a GS/s sample interval, so
+        # it would accept any two timebases.
         if (
             channel.n_samples != n_samples
-            or not np.isclose(channel.dt, first.dt)
-            or not np.isclose(channel.t0, first.t0)
+            or abs(channel.dt - first.dt) > _TIMEBASE_RTOL * first.dt
+            or abs(channel.t0 - first.t0) > _TIMEBASE_RTOL * first.dt
         ):
             raise ValueError("channels must share a timebase")
         if channel.unit != first.unit:

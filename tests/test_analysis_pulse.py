@@ -179,3 +179,14 @@ def test_a_tiny_channel_has_no_peaks() -> None:
 def test_a_flat_channel_has_no_peaks() -> None:
     flat = Channel(name="C1", volts=np.zeros(N), t0=0.0, dt=DT)
     assert find_peaks(flat, prominence=0.1) == []
+
+
+def test_a_negative_pulse_has_a_fall_time() -> None:
+    values = np.zeros(1000)
+    values[400:600] = -1.0
+    values = np.convolve(values, np.ones(20) / 20, mode="same")
+    metrics = pulse_metrics(Channel(name="n", volts=values, t0=0.0, dt=DT))
+
+    # Leading edge falls, trailing edge rises; both are 20-sample ramps.
+    assert metrics.fall_time == pytest.approx(metrics.rise_time, rel=0.05)
+    assert metrics.fall_time == pytest.approx(16 * DT, rel=0.1)

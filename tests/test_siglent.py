@@ -77,6 +77,7 @@ class FakeTransport:
         memory_depth: str = "10k",
         memory_management: str = "AUTO",
         timebase: str = "1.00E-06",
+        esr: str = "0",
     ) -> None:
         self.descriptor = descriptor
         self.data_arrays = list(data_arrays)
@@ -90,6 +91,7 @@ class FakeTransport:
         self.memory_depth = memory_depth
         self.memory_management = memory_management
         self.timebase = timebase
+        self.esr = esr
         self.num_acq = 0
         self.opened = False
         self.closed = False
@@ -129,6 +131,8 @@ class FakeTransport:
             return self.memory_management
         if command == ":TIMebase:SCALe?":
             return self.timebase
+        if command == "*ESR?":
+            return self.esr
         raise AssertionError(f"unexpected query {command!r}")
 
     def query_block(self, command: str) -> bytes:
@@ -577,9 +581,12 @@ def test_wave_desc_is_frozen() -> None:
         writable.vdiv = 1.0
 
 
-def test_timebase_index_out_of_range_falls_back() -> None:
-    desc = parse_wavedesc(make_descriptor(tdiv_index=255))
-    assert desc.timebase == pytest.approx(1e-3)
+def test_timebase_index_out_of_range_is_rejected() -> None:
+    # A guessed timebase would give a wrong t0 with no sign of it.
+    with pytest.raises(ValueError, match="timebase index 255"):
+        parse_wavedesc(make_descriptor(tdiv_index=255))
+    with pytest.raises(ValueError, match="timebase index -1"):
+        parse_wavedesc(make_descriptor(tdiv_index=-1))
 
 
 def test_empty_channels_rejected() -> None:
@@ -961,3 +968,182 @@ def test_configure_impedance_top_level_converts_ohms() -> None:
 def test_last_acquisition_is_none_before_any_call() -> None:
     scope, _fake = make_driver(("C1",))
     assert scope.last_acquisition is None
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-11 audit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rate", [1e9, 2.5e9, 5e9, 10e9])
+def test_snap_timebase_tolerates_float_rounding(rate: float) -> None:
+    # 25000 / 5e9 / 10 is one ulp above 5e-7; it must not become 1e-6.
+    for step in TDIV_ENUM:
+        samples = round(step * 10 * rate)
+        if samples < 1:
+            continue
+        assert snap_timebase(samples / rate / 10) == step
+
+
+def test_wavedesc_interval_is_the_decimal_the_scope_meant() -> None:
+    # The field is a float32; widened it reads 2.000000027e-10.
+    assert parse_wavedesc(make_descriptor(interval=2e-10)).interval == 2e-10
+
+
+def test_configure_writes_the_trigger_after_the_vertical_settings() -> None:
+    scope, fake = make_driver(channels=("C1",))
+    scope.connect()
+    scope.configure({"trigger": {"source": "CH1", "level": 0.5}, "range": 1.0})
+
+    scale = fake.written.index(":CHANnel1:SCALe 0.5")
+    level = fake.written.index(":TRIGger:EDGE:LEVel 0.5")
+    # The scope clamps the level to the range it has at the time of the write.
+    assert scale < level
+    assert ":TRIGger:EDGE:SOURce C1" in fake.written
+
+
+def test_configure_accepts_ch_spellings_in_per_channel_mappings() -> None:
+    scope, fake = make_driver(channels=("C1", "C2"))
+    scope.connect()
+    scope.configure({"offset": {"CH2": 0.25}})
+    assert ":CHANnel2:OFFSet 0.25" in fake.written
+
+
+def test_configure_raises_when_the_instrument_rejects_a_setting() -> None:
+    scope, fake = make_driver(channels=("C1",))
+    scope.connect()
+    fake.esr = "16"
+    with pytest.raises(ValueError, match="rejected at least one setting"):
+        scope.configure({"timebase": 1e-6})
+
+
+def test_check_errors_can_be_turned_off() -> None:
+    fake = FakeTransport(make_descriptor(), [], esr="16")
+    scope = SiglentSDS6204L(channels=("C1",), check_errors=False, transport=fake)
+    scope.connect()
+    scope.configure({"timebase": 1e-6})
+    assert "*ESR?" not in fake.queried
+
+
+def test_a_rejected_configure_leaves_the_channels_unchanged() -> None:
+    scope, _ = make_driver(channels=("C1",))
+    scope.connect()
+    with pytest.raises(ValueError):
+        scope.configure({"channels": ("C1", "C2"), "pretrigger": 2.0})
+    assert scope.channels == ("C1",)
+
+
+def test_pretrigger_in_samples_is_a_time_at_the_requested_rate() -> None:
+    scope, fake = make_driver(channels=("C1",))
+    scope.connect()
+    # 8192 samples at 5 GS/s is 1.6384 us, which snaps up to a 2 us window.
+    # 1000 samples are 200 ns before the trigger, whatever the window became.
+    scope.configure({"sample_rate": 5e9, "record_length": 8192, "pretrigger": 1000})
+    assert ":TIMebase:SCALe 2e-07" in fake.written
+    assert ":TIMebase:DELay 8e-07" in fake.written
+
+
+def test_pretrigger_longer_than_the_window_is_rejected() -> None:
+    scope, _ = make_driver(channels=("C1",))
+    scope.connect()
+    with pytest.raises(ValueError, match="longer than"):
+        scope.configure(
+            {"sample_rate": 5e9, "record_length": 10000, "pretrigger": 20000}
+        )
+
+
+def test_a_new_window_keeps_the_pretrigger_fraction() -> None:
+    scope, fake = make_driver(channels=("C1",))
+    scope.connect()
+    scope.configure({"sample_rate": 5e9, "record_length": 10000, "pretrigger": 0.1})
+    assert fake.written.count(":TIMebase:DELay 8e-07") == 1
+
+    scope.configure({"record_length": 100000})
+    # 20 us window: 10 % before the trigger is a delay of 8 us, not 0.8 us.
+    assert ":TIMebase:DELay 8e-06" in fake.written
+
+
+def test_fetch_after_an_expired_wait_raises() -> None:
+    scope, fake = make_driver(channels=("C1",))
+    fake.advance_on_run = False
+    scope.connect()
+    scope.arm()
+
+    assert scope.wait(timeout=0.01) is False
+    # The scope's memory still holds the previous acquisition.
+    with pytest.raises(RuntimeError, match="before a completed wait"):
+        scope.fetch()
+    assert scope.armed
+
+
+def test_fetch_untriggered_reads_the_buffer_deliberately() -> None:
+    scope, fake = make_driver(
+        channels=("C1",), data_arrays=[np.array([0, 25, -25], dtype=np.int16)]
+    )
+    fake.advance_on_run = False
+    scope.connect()
+    scope.arm()
+    assert scope.wait(timeout=0.01) is False
+
+    captures = scope.fetch_untriggered()
+
+    assert len(captures) == 1
+    assert captures[0].n_samples == 3
+    assert not scope.armed
+
+
+def test_fetch_untriggered_requires_an_armed_scope() -> None:
+    scope, _ = make_driver(channels=("C1",))
+    scope.connect()
+    with pytest.raises(RuntimeError, match="requires an armed scope"):
+        scope.fetch_untriggered()
+
+
+def test_a_failed_connect_closes_the_transport() -> None:
+    class Dead(FakeTransport):
+        def query(self, command: str) -> str:
+            raise TimeoutError("no answer")
+
+    fake = Dead(make_descriptor(), [])
+    scope = SiglentSDS6204L(transport=fake)
+    with pytest.raises(TimeoutError):
+        scope.connect()
+    assert fake.closed
+
+
+def test_socket_transport_reconnects_after_a_timeout() -> None:
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(2)
+    port = server.getsockname()[1]
+    release = threading.Event()
+
+    def serve() -> None:
+        # First connection: never answers in time, then sends a late reply.
+        first, _ = server.accept()
+        first.recv(1024)
+        release.wait(timeout=5.0)
+        try:
+            first.sendall(b"LATE\n")
+        except OSError:
+            pass
+        first.close()
+        # Second connection: answers at once.
+        second, _ = server.accept()
+        with second:
+            second.recv(1024)
+            second.sendall(b"FRESH\n")
+        server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    transport = _SocketTransport("127.0.0.1", port, 0.1)
+    transport.open()
+    with pytest.raises(TimeoutError):
+        transport.query("FIRST?")
+    release.set()
+    # The late reply to FIRST? must not be read as the answer to SECOND?.
+    assert transport.query("SECOND?") == "FRESH"
+    transport.close()
+    thread.join(timeout=5.0)

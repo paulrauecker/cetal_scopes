@@ -65,3 +65,9 @@ def test_configure_stores_settings() -> None:
     scope = FakeScope()
     scope.configure({"sample_rate": 1e9})
     assert scope.settings == {"sample_rate": 1e9}
+
+
+def test_fetch_untriggered_is_not_available_by_default() -> None:
+    scope = FakeScope()
+    with pytest.raises(NotImplementedError, match="without a trigger"):
+        scope.fetch_untriggered()

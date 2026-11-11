@@ -790,3 +790,89 @@ def test_hardware_open_and_software_trigger_capture() -> None:
         capture = scope.acquire()
         assert capture.n_samples == 1024
         assert np.all(np.isfinite(capture["CH0"].volts))
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-11 audit
+# ---------------------------------------------------------------------------
+
+
+def test_trigger_level_is_validated_before_connect() -> None:
+    # max_adc is still 0 here, so a check in ADC codes would accept anything.
+    scope = SpectrumM5i3367(channels=("CH0",), card=FakeCard())
+    with pytest.raises(ValueError, match="outside the"):
+        scope.configure({"range": 1.0, "trigger": {"source": "CH0", "level": 1.5}})
+
+
+def test_adding_a_channel_clamps_the_sample_rate_again() -> None:
+    scope, card = make_driver()
+    scope.configure({"sample_rate": 10e9, "record_length": 32})
+    scope.configure({"channels": ("CH0", "CH1")})
+    card.fake_waveform = np.zeros(64, dtype=np.int16)
+    scope.acquire()
+    assert card.registers[SPC_SAMPLERATE] == 5_000_000_000
+
+    scope.configure({"channels": ("CH0",)})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+    scope.acquire()
+    assert card.registers[SPC_SAMPLERATE] == 10_000_000_000
+
+
+def test_volts_use_the_offset_the_card_applies() -> None:
+    scope, card = make_driver()
+    # 0.123 V on the 1 V range is 12.3 %; the register takes whole percent.
+    scope.configure({"record_length": 32, "range": 1.0, "offset": 0.123})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+    capture = scope.acquire()
+
+    assert card.registers[SPC_OFFS0] == 12
+    assert capture["CH0"].volts[0] == pytest.approx(-0.12)
+    assert capture.metadata["channel_offset_v"]["CH0"] == pytest.approx(0.12)
+    assert capture.metadata["channel_offset_requested_v"]["CH0"] == 0.123
+
+
+def test_fetch_after_an_expired_wait_raises() -> None:
+    card = FakeCard(timeout=True)
+    scope = SpectrumM5i3367(channels=("CH0",), card=card)
+    scope.connect()
+    scope.configure({"record_length": 32})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+    scope.arm()
+
+    assert scope.wait(timeout=0.01) is False
+    # The DMA buffer is not full: its tail is still zeros.
+    with pytest.raises(RuntimeError, match="before a completed wait"):
+        scope.fetch()
+    with pytest.raises(NotImplementedError):
+        scope.fetch_untriggered()
+
+
+def test_configure_between_arm_and_fetch_does_not_rescale_the_record() -> None:
+    scope, card = make_driver()
+    scope.configure({"record_length": 32, "range": 1.0})
+    card.fake_waveform = np.full(32, 2047, dtype=np.int16)
+    scope.arm()
+    scope.configure({"range": 0.2})
+    assert scope.wait(timeout=0.01)
+    capture = scope.fetch()
+
+    assert capture["CH0"].volts[0] == pytest.approx(1.0)
+    assert capture.metadata["channel_range_mv"] == {"CH0": 1000}
+
+
+def test_a_failed_connect_releases_the_card() -> None:
+    card = FakeCard(function_type=99)
+    scope = SpectrumM5i3367(card=card)
+    with pytest.raises(RuntimeError, match="not an analog-input card"):
+        scope.connect()
+    assert card.closed
+
+
+def test_wait_shares_one_deadline_between_its_two_commands() -> None:
+    scope, card = make_driver()
+    scope.configure({"record_length": 32})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+    scope.arm()
+    assert scope.wait(timeout=0.5)
+    # The DMA wait gets what is left of the timeout, never a second full one.
+    assert 1 <= card.registers[SPC_TIMEOUT] <= 500

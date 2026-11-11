@@ -41,6 +41,8 @@ class StagedFakeScope(Scope):
         arm_barrier: threading.Event | None = None,
         fail_on_arm: bool = False,
         fail_on_fetch: bool = False,
+        fail_on_force: bool = False,
+        readable_untriggered: bool = True,
         n_captures: int = 1,
     ) -> None:
         self.label = label
@@ -50,6 +52,8 @@ class StagedFakeScope(Scope):
         self.arm_barrier = arm_barrier
         self.fail_on_arm = fail_on_arm
         self.fail_on_fetch = fail_on_fetch
+        self.fail_on_force = fail_on_force
+        self.readable_untriggered = readable_untriggered
         self.triggered = threading.Event()
         self.settings: dict[str, Any] = {}
         self.connected = False
@@ -101,7 +105,14 @@ class StagedFakeScope(Scope):
         self._armed = False
         self.triggered.clear()
 
+    def fetch_untriggered(self) -> list[Capture]:
+        if not self.readable_untriggered:
+            return super().fetch_untriggered()
+        return self.fetch_all()
+
     def force_trigger(self) -> None:
+        if self.fail_on_force:
+            raise RuntimeError(f"{self.label}: cannot force")
         self.journal.append(f"force:{self.label}")
         self.triggered.set()
 
@@ -687,3 +698,59 @@ def test_a_settings_failure_on_open_names_the_instrument() -> None:
 
     with pytest.raises(ValueError, match=r"^b: trigger level 1\.5 V"):
         run(main())
+
+
+def test_fetch_on_timeout_without_a_readable_buffer_stays_a_timeout() -> None:
+    journal: list[str] = []
+    scope = StagedFakeScope("only", journal, readable_untriggered=False)
+    specs = [
+        InstrumentSpec(label="only", scope=scope, timeout=0.05, fetch_on_timeout=True)
+    ]
+
+    async def main() -> Any:
+        async with MultiScopeAcquisition(specs, poll_interval=0.01) as run_:
+            return await run_.run_shot()
+
+    item = run(main()).result("only")
+
+    assert item.state == "timeout"
+    assert item.captures == ()
+    assert "buffer not read" in (item.error or "")
+    assert scope.aborts >= 1
+
+
+def test_a_failed_forced_trigger_disarms_the_instrument() -> None:
+    journal: list[str] = []
+    scope = StagedFakeScope("only", journal, fail_on_force=True)
+    specs = [InstrumentSpec(label="only", scope=scope, direct_trigger=True)]
+
+    async def main() -> Any:
+        async with MultiScopeAcquisition(specs, poll_interval=0.01) as run_:
+            first = await run_.run_shot()
+            armed_after = scope.armed
+            scope.fail_on_force = False
+            return first, armed_after, await run_.run_shot()
+
+    first, armed_after, second = run(main())
+
+    assert first.result("only").state == "error"
+    # Left armed, the next shot's arm() would fail with "already armed".
+    assert not armed_after
+    assert second.result("only").state == "ok"
+
+
+def test_reconfigure_is_refused_during_a_shot() -> None:
+    journal: list[str] = []
+    scope = StagedFakeScope("only", journal)
+    specs = [InstrumentSpec(label="only", scope=scope)]
+
+    async def main() -> None:
+        async with MultiScopeAcquisition(specs) as run_:
+            await run_.reconfigure("only", {"range": 1.0})
+            assert scope.settings == {"range": 1.0}
+            async with run_._shot_lock:
+                with pytest.raises(RuntimeError, match="during a shot"):
+                    await run_.reconfigure("only", {"range": 2.0})
+            assert scope.settings == {"range": 1.0}
+
+    run(main())

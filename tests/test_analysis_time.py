@@ -255,3 +255,17 @@ def test_resample_onto_rejects_a_bad_grid(grid: np.ndarray) -> None:
     channel = Channel(name="C1", volts=np.ones(4), t0=0.0, dt=1.0)
     with pytest.raises(ValueError):
         resample_onto(channel, grid)
+
+
+def test_subtract_baseline_rejects_an_empty_window() -> None:
+    channel = make_channel([1.0, 1.0, 1.0, 1.0])
+    with pytest.raises(ValueError, match="no samples"):
+        subtract_baseline(channel, t_start=1.2, t_end=1.8)
+
+
+def test_remove_adc_comb_handles_a_partial_last_period() -> None:
+    pattern = np.array([0.3, -0.1, 0.2, -0.4])
+    volts = np.tile(pattern, 8)[:30] + 1.0
+    channel = Channel(name="CH1", volts=volts, t0=0.0, dt=1.0)
+    result = remove_adc_comb(channel, period=4)
+    assert np.ptp(result.volts) == pytest.approx(0.0, abs=1e-12)

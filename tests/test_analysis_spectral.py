@@ -268,3 +268,12 @@ def test_stft_resolves_a_frequency_jump_mid_record() -> None:
     assert last_peak == pytest.approx(800.0, abs=5.0)
     assert spectrogram.freq.shape == (501,)
     assert spectrogram.times.shape == (10,)
+
+
+def test_fft_carries_the_channel_unit() -> None:
+    volts = np.sin(np.arange(64) * 0.4)
+    field = fft(Channel(name="B", volts=volts, t0=0.0, dt=1e-9, unit="T"))
+    rate = fft(Channel(name="dB", volts=volts, t0=0.0, dt=1e-9, unit="T/s"))
+
+    assert (field.amplitude_unit, field.psd_unit) == ("T", "T^2/Hz")
+    assert (rate.amplitude_unit, rate.psd_unit) == ("T/s", "(T/s)^2/Hz")

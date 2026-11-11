@@ -139,8 +139,8 @@ def coherence(
     Returns
     -------
     Spectrum
-        ``amplitude`` carries the coherence and ``psd`` its square; the units
-        are dimensionless.
+        ``psd`` carries the magnitude-squared coherence and ``amplitude``
+        its square root; the units are dimensionless (``"1"``).
 
     See Also
     --------
@@ -169,6 +169,8 @@ def coherence(
         freq=np.asarray(freq, dtype=np.float64),
         amplitude=np.asarray(magnitude, dtype=np.float64),
         psd=np.asarray(values, dtype=np.float64),
+        amplitude_unit="1",
+        psd_unit="1",
         window=window,
     )
 

@@ -23,6 +23,12 @@ __all__ = [
 ]
 
 
+def _psd_unit(unit: str) -> str:
+    """Unit of a power spectral density of a quantity in ``unit``."""
+    base = unit if unit.isalnum() else f"({unit})"
+    return f"{base}^2/Hz"
+
+
 def window_values(channel: Channel, *, window: str = "hann") -> NDArray[np.float64]:
     """Return the window coefficients for a channel's length.
 
@@ -93,6 +99,8 @@ def fft(
         freq=np.asarray(freq, dtype=np.float64),
         amplitude=np.asarray(amplitude, dtype=np.float64),
         psd=np.asarray(psd, dtype=np.float64),
+        amplitude_unit=channel.unit,
+        psd_unit=_psd_unit(channel.unit),
         window=window,
     )
 

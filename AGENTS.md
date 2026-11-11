@@ -99,6 +99,15 @@ Read `docs/architecture.md` before changing the data model. In short:
   `sample_width="WORD"`; `BYTE` is a lossy top-byte truncation and still carries
   the comb. Use `analysis.remove_adc_comb()` for broadband work or analyze a
   band/tone rather than the global FFT peak.
+  `configure()` writes the trigger last (the scope clamps the level to the
+  source channel's range at the time of the write) and reads `*ESR?` at the
+  end: an execution or command error raises `ValueError`. Pass
+  `check_errors=False` to the driver if a harmless write latches one. After a
+  socket timeout the transport reconnects, because the late reply would
+  otherwise be read as the answer to the next query.
+- `fetch()` raises unless `wait()` returned `True`, on every driver. Reading
+  an untriggered buffer is `fetch_untriggered()` (Siglent only; the M5i has
+  nothing meaningful to read).
 - M5i gotcha: only `base/2**n` sample rates exist, so a requested rate in
   between is silently rounded to the nearest divided clock (2 GS/s -> 1.25
   GS/s with both channels on). `Capture.metadata` records
@@ -164,7 +173,8 @@ workspace member's `dash`/`plotly`).
   stale Nix symlink; `uvx ruff@0.16.2` matches CI)
 - Format: `uv run ruff format src tests apps` (CI enforces `--check`)
 - Typecheck: `uv run pyright src apps`
-- Test: `uv run pytest`
+- Test: `uv run pytest` (tests marked `hardware` are deselected by default;
+  run them on the bench with `uv run pytest -m hardware`)
   - Single test: `uv run pytest tests/test_capture.py::test_default_channel_names_and_shape`
   - App test: `uv run pytest apps/realtime_viewer/tests`
 - Docs preview: `uv run mkdocs serve` (build: `uv run mkdocs build`, output `site/`)

@@ -252,7 +252,11 @@ def pulse_metrics(
         else (rise_end - rise_start) * channel.dt
     )
 
-    fall_start = _first_crossing(values, high_reference, peak_index, rising=False)
+    # A positive pulse falls after its peak. When the largest excursion is the
+    # low level instead (a negative pulse), the falling edge is before it, so
+    # the search must start at the beginning of the record.
+    fall_from = peak_index if values[peak_index] >= midpoint else 0
+    fall_start = _first_crossing(values, high_reference, fall_from, rising=False)
     fall_end = (
         None
         if fall_start is None

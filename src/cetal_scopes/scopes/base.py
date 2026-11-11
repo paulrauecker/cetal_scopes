@@ -226,6 +226,25 @@ class Scope(ABC):
         """
         return [self.fetch()]
 
+    def fetch_untriggered(self) -> list[Capture]:
+        """Read the instrument's buffer although no trigger arrived, and disarm.
+
+        The explicit counterpart of :meth:`fetch`, which refuses an
+        acquisition that :meth:`wait` has not reported complete. What comes
+        back is *not* this arm's event: on an oscilloscope it is the waveform
+        of the previous trigger. Only a driver whose hardware holds a
+        readable record without a trigger implements this.
+
+        Raises
+        ------
+        NotImplementedError
+            If the instrument has nothing meaningful to read without a
+            trigger.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot read its buffer without a trigger"
+        )
+
     def abort(self) -> None:
         """Disarm and discard any pending acquisition.
 

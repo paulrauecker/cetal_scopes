@@ -137,3 +137,34 @@ def test_b_magnitude_validates_inputs() -> None:
     short = Channel(name="C", volts=np.zeros(4), t0=0.0, dt=DT, unit="T")
     with pytest.raises(ValueError, match="share a timebase"):
         b_magnitude(a, short)
+
+
+def test_b_magnitude_rejects_a_different_sample_interval() -> None:
+    # numpy's default absolute tolerance (1e-8) is larger than these.
+    a = Channel(name="x", volts=np.ones(8), t0=0.0, dt=1e-10, unit="T")
+    b = Channel(name="y", volts=np.ones(8), t0=0.0, dt=2e-10, unit="T")
+    with pytest.raises(ValueError, match="share a timebase"):
+        b_magnitude(a, b)
+
+
+def test_b_magnitude_rejects_a_shifted_origin() -> None:
+    a = Channel(name="x", volts=np.ones(8), t0=0.0, dt=1e-10, unit="T")
+    b = Channel(name="y", volts=np.ones(8), t0=5e-9, dt=1e-10, unit="T")
+    with pytest.raises(ValueError, match="share a timebase"):
+        b_magnitude(a, b)
+
+
+@pytest.mark.parametrize("unit", ["V/(V/m)", "V/(V/m/s)"])
+def test_a_sensor_that_is_not_a_b_dot_is_refused(unit: str) -> None:
+    transfer = TransferFunction(freq=[1e6, 4e8], gain=[1.0, 1.0], unit=unit)
+    channel = Channel(
+        name="E",
+        volts=np.sin(np.arange(256) * 0.3),
+        t0=0.0,
+        dt=1e-9,
+        antenna=Antenna(name="e-probe", kind="e-field", transfer_function=transfer),
+    )
+    with pytest.raises(ValueError, match="not a B-dot"):
+        b_field(channel, outside="zero")
+    with pytest.raises(ValueError, match="not a B-dot"):
+        b_field_rate(channel, outside="zero")

@@ -121,3 +121,9 @@ def test_decimate_envelope_output_is_in_time_order() -> None:
 def test_decimate_envelope_rejects_mismatched_lengths() -> None:
     with pytest.raises(ValueError, match="same shape"):
         decimate_envelope(np.arange(10.0), np.arange(5.0), 4)
+
+
+def test_plot_capture_labels_a_calibrated_unit() -> None:
+    capture = Capture(volts=np.zeros((1, 4)), t0=0.0, dt=1e-9, units={"CH1": "T"})
+    ax = plot_capture(capture)
+    assert ax.get_ylabel() == "signal (T)"

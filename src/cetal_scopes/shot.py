@@ -4,7 +4,8 @@ A :class:`Shot` is a convenience aggregator for one experiment whose data was
 recorded by more than one instrument. Each :class:`~cetal_scopes.capture.Capture`
 has its own trigger and timebase, so different captures do not share a clock;
 :class:`Shot` pairs them with a scalar time offset that puts them on a common
-axis. It is an in-memory container only and is not persisted.
+axis. :func:`~cetal_scopes.storage.save_shot` and
+:func:`~cetal_scopes.storage.load_shot` persist it as a directory of captures.
 """
 
 from __future__ import annotations
