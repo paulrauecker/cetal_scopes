@@ -49,6 +49,7 @@ pythonpath = [
     "apps/bdot_vector",
     "apps/bdot_transient",
     "apps/phase_delay",
+    "apps/trigger_link",
 ]
 
 [tool.pyright]
@@ -62,6 +63,7 @@ extraPaths = [
     "apps/bdot_vector",
     "apps/bdot_transient",
     "apps/phase_delay",
+    "apps/trigger_link",
 ]
 
 [tool.uv.workspace]
