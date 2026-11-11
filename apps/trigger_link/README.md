@@ -42,6 +42,7 @@ The summary is saved as JSON under `measurements/trigger_link/`.
 | Siglent Aux Out | Trigger out | Set on the front panel; the driver can't set it or read it back. |
 | M5i Ext0 | `{"source": "EXT", "level": 1.5, "slope": "RISING"}` | At 3 kΩ termination (the driver default) the pulse arrives at 3.0–3.5 V. |
 | M5i `trigger_termination` | `3000` (default) or `50` | At 50 Ω the pulse is only 0.4–0.75 V, because Aux Out has a high source impedance. Use `--level 0.25` there. |
+| M5i `--reference-clock` | `10e6` with Siglent 10 MHz Out → Clk In | Locks the M5i sample clock to the Siglent's reference. Without the signal, every arm fails with error 268. |
 | SG8 power | ≤ +5 dBm | It drives the scope inputs directly; `--power` is refused above the cap. |
 
 On the 50 Ω setting: the datasheet rates both terminations well above 3.3 V

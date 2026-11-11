@@ -1,0 +1,45 @@
+{
+  "args": {
+    "resource": "ASRL/dev/ttyUSB0::INSTR",
+    "address": "192.168.0.11",
+    "device": "/dev/spcm0",
+    "siglent_channels": [
+      "C3",
+      "C4"
+    ],
+    "trigger_channel": "C3",
+    "m5i_channel": "CH0",
+    "power": 0.0,
+    "freqs": [
+      100.0
+    ],
+    "shots": 300,
+    "level": 1.5,
+    "termination": 3000,
+    "reference_clock": 10000000.0,
+    "timebase": 1e-06,
+    "range": 0.1,
+    "m5i_range": 0.2,
+    "m5i_samples": 65536,
+    "settle": 0.3,
+    "quiet": 0.3,
+    "timeout": 5.0,
+    "out": "measurements/trigger_link"
+  },
+  "results": [
+    {
+      "frequency": 100000000.0,
+      "shots": 300,
+      "missed": 0,
+      "spurious": 0,
+      "siglent_jitter": 1.1184897626052826e-10,
+      "siglent_pair_jitter": 7.708747836397172e-13,
+      "link_jitter": 2.845692383515615e-09,
+      "link_fit_noise": 1.1743440749149387e-09,
+      "link_resolved": false,
+      "link_mean_phase": -0.85202999749861,
+      "m5i_vpp": 7.0711610885296205e-06
+    }
+  ],
+  "link_delay_s": null
+}

@@ -177,6 +177,7 @@ def run(args: argparse.Namespace) -> list[FrequencyResult]:
                 "offset": 0.0,
                 "trigger": {"source": "EXT", "level": args.level, "slope": "RISING"},
                 "trigger_termination": args.termination,
+                "reference_clock": args.reference_clock,
             }
         )
         gen.set_power(args.power)
@@ -258,6 +259,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shots", type=int, default=30)
     p.add_argument("--level", type=float, default=1.5, help="M5i EXT level, V")
     p.add_argument("--termination", type=int, default=3000, choices=(50, 3000))
+    p.add_argument(
+        "--reference-clock",
+        type=float,
+        help="Hz on M5i Clk In to lock to, e.g. 10e6 (Siglent 10 MHz Out)",
+    )
     p.add_argument("--timebase", type=float, default=1e-6, help="Siglent s/div")
     p.add_argument("--range", type=float, default=0.1, help="Siglent V/div")
     p.add_argument("--m5i-range", type=float, default=0.2, help="M5i ±V")
