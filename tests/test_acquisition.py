@@ -522,6 +522,18 @@ def test_closing_closes_every_instrument() -> None:
     assert all(spec.scope.closed for spec in specs)  # type: ignore[attr-defined]
 
 
+def test_closing_aborts_every_instrument_first() -> None:
+    journal: list[str] = []
+    specs = make_specs(journal, labels=("a", "b"))
+
+    async def main() -> None:
+        async with MultiScopeAcquisition(specs):
+            pass
+
+    run(main())
+    assert all(spec.scope.aborts >= 1 for spec in specs)  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------------------------
 # Instruments that cannot really be staged
 # ---------------------------------------------------------------------------

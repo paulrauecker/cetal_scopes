@@ -643,7 +643,7 @@ class SpectrumM5i3367(Scope):
         ValueError
             If ``ohms`` is not 50 or 3000.
         """
-        value = int(round(float(ohms)))
+        value = round(float(ohms))
         if value not in EXT0_TERMINATIONS_OHM:
             raise ValueError(
                 f"unsupported trigger termination {ohms!r} ohm; the "

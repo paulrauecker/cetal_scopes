@@ -22,10 +22,18 @@ only lasts until it's unplugged or the system reboots.
 
 from __future__ import annotations
 
-from types import TracebackType
+import atexit
+import signal
+import threading
+from types import FrameType, TracebackType
 from typing import Any, Protocol, Self
 
 __all__ = ["SG8SignalGenerator"]
+
+#: Signals whose default action ends the process with no Python cleanup.
+_TERMINATION_SIGNALS = tuple(
+    getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)
+)
 
 DEFAULT_BAUD_RATE = 115200
 _MAX_COMMAND_LENGTH = 64
@@ -53,6 +61,25 @@ def _normalize_reference_source(source: str) -> str:
     if text.upper() not in {s.upper() for s in _REFERENCE_SOURCES}:
         raise ValueError(f"reference source must be 'INT' or 'EXT', got {source!r}")
     return "INT" if text.upper().startswith("INT") else "EXT"
+
+
+def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _install_termination_handlers() -> None:
+    """Turn SIGTERM / SIGHUP into :class:`SystemExit` so cleanup runs.
+
+    Their default action kills the process outright, skipping ``with`` blocks
+    and :mod:`atexit`, which would leave RF Out on. Only signals still at their
+    default are touched, so a handler the application installed (uvicorn's,
+    for one) wins. Python only allows this from the main thread.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for signum in _TERMINATION_SIGNALS:
+        if signal.getsignal(signum) is signal.SIG_DFL:
+            signal.signal(signum, _exit_on_signal)
 
 
 class _Transport(Protocol):
@@ -205,9 +232,29 @@ class SG8SignalGenerator:
         except Exception:
             self._connected = False
             raise
+        _install_termination_handlers()
+        atexit.register(self.close)
 
     def close(self) -> None:
-        """Close the transport. Safe to call repeatedly."""
+        """Turn RF Out off and close the transport. Safe to call repeatedly.
+
+        The instrument keeps its output on after the link closes, so closing
+        without this leaves the RF on with nothing supervising it. The
+        transport is closed even if the ``OUTPut 0`` write fails; that error
+        is then raised, since the RF state is unknown.
+
+        Also runs at interpreter exit for a generator left connected, and
+        :meth:`connect` turns SIGTERM / SIGHUP into a normal exit, so a soft
+        kill turns the RF off too. SIGKILL and power loss cannot be caught.
+        """
+        atexit.unregister(self.close)
+        try:
+            if self._connected:
+                self.set_output(False)
+        finally:
+            self._close_transport()
+
+    def _close_transport(self) -> None:
         if self._transport is not None:
             self._transport.close()
             if self._owns_transport:

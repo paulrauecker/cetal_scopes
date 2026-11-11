@@ -162,13 +162,20 @@ class AsyncScope:
         return await self._call(self._scope.trigger_status)
 
     async def aclose(self) -> None:
-        """Close the driver and shut the worker thread down.
+        """Abort, close the driver and shut the worker thread down.
+
+        Aborts first: :meth:`~cetal_scopes.scopes.base.Scope.close` only
+        releases the connection, so without it an armed instrument stays armed
+        (or running) after the process exits.
 
         Waits for the thread: dropping a pool with a live driver call in it
         leaves a thread writing to a handle the process is about to reuse.
         """
         try:
-            await self._call(self._scope.close)
+            try:
+                await self._call(self._scope.abort)
+            finally:
+                await self._call(self._scope.close)
         finally:
             self._pool.shutdown(wait=True)
 
