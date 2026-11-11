@@ -337,6 +337,13 @@ class SG8SignalGenerator:
         Turning it on causes a brief (~5 ms) level glitch as the APC has no
         input yet and runs at max gain momentarily; use an external
         attenuator ahead of sensitive-input devices.
+
+        The RF is not at level when this (or a following
+        :meth:`operation_complete`) returns: a capture taken straight after
+        reads the noise floor, and the output is only settled (to within
+        1 %) by ~0.9 s later (measured 2026-11-10). Wait ~1 s after turning
+        on before measuring. Frequency changes with the output already on
+        settle within 50 ms.
         """
         self._write(f"OUTPut {_normalize_on_off(state)}")
 

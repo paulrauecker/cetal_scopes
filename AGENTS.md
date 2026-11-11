@@ -114,6 +114,32 @@ Read `docs/architecture.md` before changing the data model. In short:
   `configure()` rejects it rather than letting `arm()` find out, because one
   instrument failing to arm discards the *whole* shot (the orchestrator never
   fires a half-armed set), so the other scope's data goes with it.
+- M5i gotcha: the Ext0 ("Trig In") termination is the `trigger_termination`
+  key (`3000`, the default, or `50` ohm; `SPC_TRIG_TERM`), written on every
+  `arm()` because the card reset may restore the unstated power-on default.
+  Datasheet: +/-5 V input level, 200 mVpp minimum swing, protection +/-20 V at
+  50 ohm and 7 Vrms at 3 kohm, trigger accuracy **1 sample** (so ~58 ps rms of
+  trigger jitter at 5 GS/s against an asynchronous source). Analog inputs are
+  far more fragile: 1.4 Vrms (+16 dBm) / +/-2 V peak on the +/-200 mV range,
+  5 Vrms on +/-500 mV and above.
+- Cross-instrument triggering: the Siglent's rear Aux Out (trigger out) into
+  the M5i's Trig In works -- 115/115 single shots, no spurious triggers. At
+  3 kohm the pulse arrives at 3.0-3.5 V (fires at a 3.0 V level, never at
+  3.5 V), so use `{"source": "EXT", "level": 1.5, "slope": "RISING"}`. At
+  `trigger_termination = 50` it collapses to 0.4-0.75 V (fires at 0.4 V, never
+  at 0.75 V: Aux Out has a high source impedance), so use `level = 0.25`
+  there. Arm the
+  M5i before the Siglent. The driver cannot set or read the Aux Out mode;
+  check it on the front panel. `apps/trigger_link` re-runs the check.
+- Siglent gotcha: `t0` carries no sub-sample trigger offset, so a capture's
+  `t = 0` is the trigger only to within one sample (~30 ps rms against a CW
+  tone at 10 GS/s, more on slow edges). Shot-to-shot timing between
+  instruments therefore cannot beat tens of ps; compare phases within one
+  acquisition instead, where channels share the error (C3-C2 stayed at
+  0.4-0.8 ps per shot).
+- Bench safety: the SG8 is wired straight into scope inputs for the
+  phase-delay work. Every script that drives it hard-caps +5 dBm
+  (`apps/phase_delay`, `apps/trigger_link`); keep that cap in new code.
 
 ## Toolchain
 

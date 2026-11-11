@@ -1,0 +1,53 @@
+{
+  "timestamp": "20261111T113012Z",
+  "label": "2-way: C2 vs C4 via one splitter + clamps, identity, 0 dBm",
+  "mode": "single run, reference C2",
+  "source_power_dbm": 0.0,
+  "frequency_plan_hz": [
+    100000000.0,
+    2000000000.0,
+    25000000.0
+  ],
+  "repeats": 2,
+  "settle_s": 0.2,
+  "scope_settings": {
+    "timebase": 5e-05,
+    "range": 0.1,
+    "offset": 0.0,
+    "coupling": "DC",
+    "impedance": 50,
+    "channels": [
+      "C2",
+      "C4"
+    ]
+  },
+  "scope_metadata": {
+    "instrument": "Siglent SDS6204L",
+    "address": "192.168.0.11",
+    "idn": "Siglent Technologies,SDS6204L,SDS6LA3CA00028,18.36.11.2.0.3.7",
+    "channels": [
+      "C2",
+      "C4"
+    ],
+    "sample_width": "WORD",
+    "sample_rate_hz": 4999999933.242841,
+    "record_length": 2500000,
+    "trigger_mode": "AUTO",
+    "trigger_source": null,
+    "trigger_slope": null,
+    "trigger_level_requested_v": null,
+    "trigger_level_v": null,
+    "streaming": false,
+    "timestamp": "2026-11-11T11:30:18.267532+00:00",
+    "channel_range_mv": {
+      "C2": 200.00000298023224,
+      "C4": 200.00000298023224
+    },
+    "channel_offset_v": {
+      "C2": 0.0,
+      "C4": 0.0
+    }
+  },
+  "demo": false,
+  "duration_s": 808.3083699069975
+}

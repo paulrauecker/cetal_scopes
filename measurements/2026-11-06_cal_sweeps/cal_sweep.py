@@ -74,6 +74,9 @@ with SiglentSDS6204L("192.168.0.11", channels=CHANNELS, timeout=5, acquire_timeo
         g.operation_complete()
         g.set_output(True)
         g.operation_complete()
+        # *OPC? returns before the RF is up; without this the first point
+        # reads (partly) the noise floor
+        time.sleep(1.0)
         g.clear_errors()
         for f in freqs:
             if time.monotonic() - start > args.budget:

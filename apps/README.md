@@ -23,6 +23,8 @@ Apps are linted and type-checked in CI, but not counted in library coverage.
 - `bdot_web/` — Dash/Plotly browser analysis for B-dot shots (a uv workspace
   member; needs `dash`/`plotly`, so run `uv sync --all-packages`).
 - `sg8_sweep/` — SG8 generator frequency-response sweep against a scope channel.
+- `phase_delay/` — cable delay differences from an SG8 multi-frequency phase sweep.
+- `trigger_link/` — Siglent Aux Out -> M5i Trig In transfer check, jitter and delay.
 - `rf_waterfall/` — live or recorded RF waterfall (spectrogram) of a scope channel.
 - `bdot_vector/` — live 3D arrow of the field a 3D B-dot sees at one tone (C1-C3).
 - `bdot_transient/` — single-shot 3D B-dot transient capture and vector replay.

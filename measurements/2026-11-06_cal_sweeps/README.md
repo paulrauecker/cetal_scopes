@@ -37,9 +37,15 @@ locked to the generator, so phases are relative to C4 (`phase_vs_c4_deg`);
 - Relative response only: received volts per generator setting, not probe
   gains. The PBS-H3 is calibrated to 50 MHz (-3 dB at 47 MHz, resonance notch
   at 492 MHz), so it is a field reference only below ~50 MHz.
-- Far field: C1 clipped at several points (`clipped` column) and 30 MHz is
-  unreliable (low SNR, ~20 dB shot spread); 1.5 m is not far field below
-  ~100-200 MHz anyway.
+- **The first point of every sweep is invalid** (10 MHz near field, 30 MHz
+  far field). The SG8 output was turned on right before it, and the RF is not
+  up when `*OPC?` returns (settled by ~0.9 s, found 2026-11-10), so its first
+  shot read the noise floor. This explains the large `amplitude_std_v` /
+  `amplitude_spread_v` there (30-60 %, against < 0.5 % from the second point
+  on). The level check has one shot per point, so its 10 MHz row may be
+  entirely noise. `cal_sweep.py` now waits 1 s after turning the output on.
+- Far field: C1 clipped at several points (`clipped` column); 1.5 m is not
+  far field below ~100-200 MHz anyway.
 - Ambient lines seen with the generator off: ~2.4 GHz (WiFi), 925/930 MHz
   (GSM), ~390 MHz.
 - Fine sweep: 5 of 500 forced triggers did not complete within 10 s and were
