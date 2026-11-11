@@ -72,7 +72,7 @@ MAX_RATE_2CH_HZ = 5e9
 
 _VALID_CHANNELS = ("CH0", "CH1")
 _CHANNEL_INDEX = {"CH0": 0, "CH1": 1}
-_PANEL_KEYS: frozenset[str] = frozenset({"segments"})
+_PANEL_KEYS: frozenset[str] = frozenset({"segments", "trigger_termination"})
 _CONFIG_KEYS = PHYSICAL_KEYS | _PANEL_KEYS
 
 # ---------------------------------------------------------------------------
@@ -137,6 +137,16 @@ _EXTERNAL_SOURCES = frozenset({"EXT", "EXT0", "EX"})
 
 #: ``SPC_TRIG_EXT0_LEVEL0`` is in millivolts and clamps at +/-5 V.
 EXT0_LEVEL_LIMIT_MV = 5000
+
+#: Ext0 termination, ohms -> ``SPC_TRIG_TERM`` value (1 = 50 ohm, 0 = 3 kohm).
+#: Datasheet (M5i.33, rev. 29.10.2026): input level +/-5 V, min swing
+#: 200 mVpp, over-voltage protection +/-20 V at 50 ohm and 7 Vrms at 3 kohm,
+#: bandwidth DC-2 GHz at 50 ohm and DC-750 MHz at 3 kohm, trigger accuracy
+#: 1 sample. The datasheet does not state a power-on default, and
+#: ``M2CMD_CARD_RESET`` (every :meth:`SpectrumM5i3367.arm`) may restore it, so
+#: the driver writes the termination on every arm.
+EXT0_TERMINATIONS_OHM: dict[int, int] = {50: 1, 3000: 0}
+DEFAULT_EXT0_TERMINATION_OHM = 3000
 
 _SLOPE_MODES = {
     "pos": SPC_TM_POS,
@@ -451,9 +461,11 @@ class SpectrumM5i3367(Scope):
     vocabulary documented on :class:`~cetal_scopes.scopes.base.Scope`
     (``sample_rate``, ``record_length``, ``pretrigger``, ``range``,
     ``offset``, ``coupling``, ``impedance``, ``trigger``), plus one
-    M5i-specific key, ``segments``: an ``int`` switches acquisition to
-    Multiple Recording (use :meth:`acquire_segments`, not :meth:`acquire`);
-    ``None`` (the default) is Standard Single.
+    M5i-specific keys: ``segments``, where an ``int`` switches acquisition
+    to Multiple Recording (use :meth:`acquire_segments`, not :meth:`acquire`)
+    and ``None`` (the default) is Standard Single; and
+    ``trigger_termination``, the external trigger input's termination in ohms
+    (``3000``, the default, or ``50``; see :meth:`set_trigger_termination`).
 
     ``coupling`` and ``impedance`` are fixed in hardware (DC, 50 ohm): they
     are accepted as no-ops when they match, and raise :class:`ValueError`
@@ -503,6 +515,7 @@ class SpectrumM5i3367(Scope):
         self._range_mv: dict[str, int] = dict.fromkeys(self._channels, 1000)
         self._offset_v: dict[str, float] = dict.fromkeys(self._channels, 0.0)
         self._trigger = TriggerSettings()
+        self._trigger_termination_ohm = DEFAULT_EXT0_TERMINATION_OHM
         self._segments: int | None = None
         self._armed = False
         self._pending: _PendingAcquisition | None = None
@@ -613,6 +626,30 @@ class SpectrumM5i3367(Scope):
 
         if "segments" in settings:
             self.set_segments(settings["segments"])
+        if "trigger_termination" in settings:
+            self.set_trigger_termination(settings["trigger_termination"])
+
+    def set_trigger_termination(self, ohms: float) -> None:
+        """Select the external trigger input's termination: 50 or 3000 ohm.
+
+        Only the ``"EXT"`` trigger source sees it. Re-check the trigger level
+        when switching: a 50 ohm source arrives at half its open-circuit level
+        at 50 ohm, and a weaker driver at less (the Siglent's Aux Out drops
+        from 3.0-3.5 V at 3 kohm to 0.4-0.75 V at 50 ohm). Both settings are safe
+        for 3.3 V logic: protection is +/-20 V at 50 ohm and 7 Vrms at 3 kohm.
+
+        Raises
+        ------
+        ValueError
+            If ``ohms`` is not 50 or 3000.
+        """
+        value = int(round(float(ohms)))
+        if value not in EXT0_TERMINATIONS_OHM:
+            raise ValueError(
+                f"unsupported trigger termination {ohms!r} ohm; the "
+                f"M5i.3367-x16 Ext0 input offers {sorted(EXT0_TERMINATIONS_OHM)}"
+            )
+        self._trigger_termination_ohm = value
 
     def set_channels(self, channels: Sequence[str]) -> None:
         """Set the active channels, carrying over existing per-channel settings."""
@@ -1019,6 +1056,9 @@ class SpectrumM5i3367(Scope):
         card.set_i32(SPC_TRIG_ANDMASK, 0)
         card.set_i32(SPC_TRIG_CH_ORMASK0, 0)
         card.set_i32(SPC_TRIG_CH_ANDMASK0, 0)
+        card.set_i32(
+            SPC_TRIG_TERM, EXT0_TERMINATIONS_OHM[self._trigger_termination_ohm]
+        )
 
         if self._trigger.source is None:
             card.set_i32(SPC_TRIG_ORMASK, SPC_TMASK_SOFTWARE)
@@ -1097,6 +1137,7 @@ class SpectrumM5i3367(Scope):
             "trigger_source": self._trigger.source,
             "trigger_level_v": self._trigger.level,
             "trigger_slope": self._trigger.slope,
+            "trigger_termination_ohm": self._trigger_termination_ohm,
             "max_adc_value": self._max_adc,
             "bytes_per_sample": self._bytes_per_sample,
             "segments": self._segments,

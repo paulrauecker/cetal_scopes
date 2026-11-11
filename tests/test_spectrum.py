@@ -39,6 +39,7 @@ from cetal_scopes.scopes.spectrum import (
     SPC_TRIG_EXT0_AVAILMODES,
     SPC_TRIG_EXT0_MODE,
     SPC_TRIG_ORMASK,
+    SPC_TRIG_TERM,
     SPCM_TYPE_AI,
     codes_to_volts,
     deinterleave,
@@ -501,6 +502,40 @@ def test_acquire_configures_an_either_edge_external_trigger() -> None:
     scope.acquire()
 
     assert card.registers[SPC_TRIG_EXT0_MODE] == SPC_TM_BOTH
+
+
+def test_external_trigger_termination_defaults_to_3k_and_is_written() -> None:
+    scope, card = make_driver()
+    scope.configure({"record_length": 32, "trigger": {"source": "EXT", "level": 1.5}})
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    capture = scope.acquire()
+
+    assert card.registers[SPC_TRIG_TERM] == 0  # 0 = high impedance (3 kohm)
+    assert capture.metadata["trigger_termination_ohm"] == 3000
+
+
+def test_external_trigger_termination_50_ohm() -> None:
+    scope, card = make_driver()
+    scope.configure(
+        {
+            "record_length": 32,
+            "trigger": {"source": "EXT", "level": 0.75},
+            "trigger_termination": 50,
+        }
+    )
+    card.fake_waveform = np.zeros(32, dtype=np.int16)
+
+    capture = scope.acquire()
+
+    assert card.registers[SPC_TRIG_TERM] == 1
+    assert capture.metadata["trigger_termination_ohm"] == 50
+
+
+def test_external_trigger_termination_rejects_other_values() -> None:
+    scope, _ = make_driver()
+    with pytest.raises(ValueError, match="termination"):
+        scope.configure({"trigger_termination": 1e6})
 
 
 def test_acquire_rejects_a_slope_the_card_does_not_offer() -> None:
