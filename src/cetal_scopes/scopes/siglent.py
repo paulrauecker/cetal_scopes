@@ -259,7 +259,14 @@ def codes_to_volts(
 
 
 def time_origin(desc: WaveDesc, grid_num: int = GRID_NUM) -> float:
-    """Return the time of the first sample in seconds."""
+    """Return the time of the first sample in seconds.
+
+    The preamble carries no sub-sample trigger offset, so ``t = 0`` is the
+    trigger only to within one sample: against a CW tone the trigger point
+    scatters uniformly over one sample period (measured on the bench: ~30 ps
+    rms, 110 ps peak-to-peak at 10 GS/s; more on slow edges). Channels of one
+    acquisition share the error exactly, so inter-channel phase is unaffected.
+    """
     return desc.delay - desc.timebase * grid_num / 2.0
 
 
