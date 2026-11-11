@@ -51,9 +51,17 @@
             UV_PYTHON_DOWNLOADS = "never";
             UV_PYTHON = python.interpreter;
           } // pkgs.lib.optionalAttrs isLinux {
-            # Lets compiled extensions (numpy, pydantic-core, etc.) find libs
+            # Lets compiled extensions (numpy, pydantic-core, etc.) find libs.
+            # glibc is filtered out of the manylinux set: on LD_LIBRARY_PATH it
+            # overrides the libc of every dynamically linked program started
+            # from this shell, and a binary built against a different glibc
+            # aborts with "stack smashing detected" (confirmed with the
+            # Nix-packaged `claude`). Nix's python already links its own glibc
+            # via RPATH, so wheels don't need it here.
             LD_LIBRARY_PATH =
-              pkgs.lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1
+              pkgs.lib.makeLibraryPath (builtins.filter
+                (p: (p.pname or "") != "glibc")
+                pkgs.pythonManylinuxPackages.manylinux1)
               + ":${vendorDriverLibDir}";
           };
 
