@@ -1,6 +1,18 @@
+import os
+import signal
+from collections.abc import Iterator
+
 import pytest
 
 from cetal_scopes import SG8SignalGenerator
+
+
+@pytest.fixture(autouse=True)
+def _restore_sigterm() -> Iterator[None]:
+    """Keep the handler connect() installs from leaking into other tests."""
+    previous = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGTERM, previous)
 
 
 class FakeTransport:
@@ -71,6 +83,59 @@ def test_context_manager_connects_and_closes() -> None:
     with SG8SignalGenerator("ASRL3::INSTR", transport=transport) as gen:
         assert gen.idn == transport.idn
     assert transport.closed
+
+
+def test_close_turns_rf_off() -> None:
+    transport = FakeTransport()
+    gen = SG8SignalGenerator("ASRL3::INSTR", transport=transport)
+    gen.connect()
+    gen.set_output(True)
+    gen.close()
+    assert transport.commands[-1] == "OUTPut 0"
+    assert transport.closed
+
+
+def test_close_is_safe_when_never_connected() -> None:
+    transport = FakeTransport()
+    SG8SignalGenerator("ASRL3::INSTR", transport=transport).close()
+    assert transport.commands == []
+
+
+def test_close_closes_the_transport_even_if_rf_off_fails() -> None:
+    transport = FakeTransport()
+    gen = SG8SignalGenerator("ASRL3::INSTR", transport=transport)
+    gen.connect()
+
+    def broken_write(command: str) -> None:
+        raise OSError("port gone")
+
+    transport.write = broken_write  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="port gone"):
+        gen.close()
+    assert transport.closed
+
+
+def test_sigterm_unwinds_the_with_block_and_turns_rf_off() -> None:
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    transport = FakeTransport()
+    with (
+        pytest.raises(SystemExit) as exit_info,
+        SG8SignalGenerator("ASRL3::INSTR", transport=transport) as gen,
+    ):
+        gen.set_output(True)
+        os.kill(os.getpid(), signal.SIGTERM)
+    assert exit_info.value.code == 128 + signal.SIGTERM
+    assert transport.commands[-1] == "OUTPut 0"
+    assert transport.closed
+
+
+def test_connect_keeps_an_application_sigterm_handler() -> None:
+    def handler(signum: int, frame: object) -> None:
+        pass
+
+    signal.signal(signal.SIGTERM, handler)
+    SG8SignalGenerator("ASRL3::INSTR", transport=FakeTransport()).connect()
+    assert signal.getsignal(signal.SIGTERM) is handler
 
 
 def test_connect_is_idempotent() -> None:
